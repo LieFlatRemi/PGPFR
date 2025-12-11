@@ -8,7 +8,7 @@ gpu=$4
 datasets=$5
 baselines=$6
 
-cd ${src_dir}/drivers
+cd ../src/drivers
 
 run_driver() {
 
@@ -29,7 +29,8 @@ for dataset_name in ${datasets[*]}; do
     if [ $dataset_name = "hgr_shrec_2017" ] 
     then
         dataset="hgr_shrec_2017"
-        root_dir="/home/hdd1/xxx/SHREC_2017"
+#        root_dir="/home/hdd1/xxx/SHREC_2017"
+        root_dir=/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/dataset/SHREC17
     elif [ $dataset_name = "ego_gesture" ]
     then
         dataset="ego_gesture"
@@ -40,8 +41,8 @@ for dataset_name in ${datasets[*]}; do
         ############################ Run baseline ############################
         #Train
         train=1
-        cfg_file=/home/xxx/dfcil-hgr-baseline/ogr_cmu/src/configs/params/$dataset/$baseline_name.yaml
-        log_dir=/home/xxx/dfcil-hgr-baseline/ogr_cmu/output/$dataset/$baseline_name
+        cfg_file=/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/PGPFR-3/src/configs/params/$dataset/$baseline_name.yaml
+        log_dir=/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/PGPFR-3/output/$dataset/$baseline_name
         trial_id=$trial_id
         run_driver
 

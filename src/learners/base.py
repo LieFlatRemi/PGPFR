@@ -22,7 +22,7 @@ from functools import reduce
 from operator import mul
 
 
-now_gpu = 3
+now_gpu = 0
 
 class Base(object):
 
@@ -54,7 +54,7 @@ class Base(object):
 
         self.cfg.num_total_classes = self.cfg_data.get_n_classes(self.args.split_type)
         # Load model
-        self.model = model_defs.get_model(edict({'n_classes': self.cfg.num_total_classes, **self.cfg.model}))
+        self.model = model_defs.get_model(edict({'n_classes': self.cfg.model.num_classes, **self.cfg.model}))
 
         # Class mapping vars
         c = 0
@@ -284,7 +284,7 @@ class Base(object):
             # set to eval mode
             self.model.eval()
             # compute mean
-            self.save_proto(self.train_loader)
+            # self.save_proto(self.train_loader)
             # new teacher
             if self.cfg.increm.learner.type == 'deep_inversion' or self.cfg.increm.learner.type == 'abd':
                 self.sample_shape = (-1, self.cfg.seq_len, self.cfg.model.n_joints, self.cfg.in_channels)
@@ -360,7 +360,10 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
+
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
 
             loss_tensors = []
 
@@ -372,6 +375,9 @@ class Base(object):
                 loss_tensors.append(lweight * lval)
 
             loss = sum(loss_tensors)
+
+            prompt_loss = reduce_sim.sum()
+            loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -450,7 +456,9 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
 
             loss_tensors = []
             for lname in self.criteria:
@@ -461,6 +469,9 @@ class Base(object):
                 loss_tensors.append(lweight * lval)
 
             loss = sum(loss_tensors)
+
+            prompt_loss = reduce_sim.sum()
+            loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
             val_acc = acc_meter(output, target) * 100
 
@@ -602,7 +613,10 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
+
             acc_meter.update(output, target)
             test_acc_ = acc_meter_torchmetrics(output, target) * 100
 

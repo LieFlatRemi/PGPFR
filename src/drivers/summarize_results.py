@@ -13,7 +13,7 @@ import utils
 
 parser = argparse.ArgumentParser(description='Summarize results.')
 parser.add_argument('--root_log_dir', type=str, default=1, required=False, help='')
-parser.add_argument('--n_trials', type=int, default=3, required=False, help='')
+parser.add_argument('--n_trials', type=int, default=1, required=False, help='')
 parser.add_argument('--n_tasks', type=int, default=7, required=False, help='')
 
 

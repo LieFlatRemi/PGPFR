@@ -1,6 +1,7 @@
 try :
     from . import dg_sta
     from . import dg_sta_BN
+    from . import dg_sta_upat
     from .helpers import print_n_params
 except :
     import dg_sta
@@ -10,6 +11,12 @@ except :
 def get_model(cfg) :
     assert cfg.name in globals(), \
         f"Model {cfg.name} not found."
+
+    if cfg.name == 'dg_sta_upat':
+        return globals()[cfg.name].Model(
+            n_classes=cfg.n_classes,
+            config=cfg
+        )
 
     if cfg.name == 'dg_sta' :
         return globals()[cfg.name].Model(

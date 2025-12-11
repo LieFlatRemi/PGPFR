@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # Run experiment
-src_dir=/home/xxx/dfcil-hgr-baseline/ogr_cmu/src
-scripts_dir=/home/xxx/dfcil-hgr-baseline/ogr_cmu/scripts
+src_dir="./src"
+scripts_dir="./scripts"
 cd ${scripts_dir}
 
 split_type="agnostic"
 CUDA_VISIBLE_DEVICES=0
-gpu=3
+gpu=0
 datasets=("hgr_shrec_2017")
-baselines=("ABD")
+baselines=("UPAT")
 trial_ids=(0)
 n_trials=${#trial_ids[@]}
 n_tasks=7
