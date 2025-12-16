@@ -3,8 +3,10 @@ seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
 workers: 1
-total_epochs: 50
-total_epochs_incremental_task: 50
+total_epochs: 30
+total_epochs_incremental_task: 10
+#total_epochs: 15
+#total_epochs_incremental_task: 10
 step_per_epoch: &step_per_epoch On
 step_per_batch: &step_per_batch Off
 log_freq:
@@ -19,35 +21,8 @@ model:
     d_feat: 128 # feature dimension
     seq_len: *seq_len # sequence length
     n_joints: 22 # number of joints
-    dropout: 0.2
+    dropout: 0.5
     num_classes: 14
-    first_split_size: 8
-    other_split_size: 1
-    # prompt specific parameters
-    # prompt_length -> frames shrec 22
-    # top_k -> joints shrec 8
-    prompt:
-        prompt_type: 7
-        prompt_pool: True
-        pool_size: 10
-        prompt_length: 22
-        top_k: 8
-        decouple: False
-        random_k: -1
-        stack_random_before: False
-        freeze_prevtask_prompts: False
-        sort: True
-        random_expand: False
-        force_select_new: False
-        temporal_pe: False
-        prompt_init: uniform
-        prompt_key: True
-        embed_dim: 128
-        embed_dim_prompt: 128
-        prompt_key_init: uniform
-        batchwise_prompt: False
-        embedding_key: query_cls
-        loss_coeff: 0.1
 
 
 transforms:
@@ -87,16 +62,22 @@ transforms:
 
 
 loss:
+    abd_local_cross_entropy:
+        weight: 1.0
+
     cross_entropy: 
         weight: 1.0
         ignore: null
         class_weight: null
 
+    abd_distillation:
+        weight: 1.0
+
 
 optimizer:
     name: 'adam'
     lr: &lr 0.001
-    lr_incremental_task: 0.01
+    lr_incremental_task: 0.001 
     betas: [0.9, 0.999]
     include_scheduler: False
     scheduler:
@@ -107,7 +88,7 @@ optimizer:
         step_per_batch: *step_per_batch
         step_per_epoch: *step_per_epoch
     query:
-        query_lr: 0.001
+        query_lr: 0.01
         dropout: 0.2
         fc_adaptor: True
           
@@ -123,7 +104,7 @@ increm:
     freeze_classifier: False
     memory: 0
     learner:
-        type: 'upat'
+        type: 'abd'
         n_samples_per_class: 300
 #        n_samples_per_class: 10
         power_iters: 1000         
@@ -132,3 +113,26 @@ increm:
         inverted_acc_thred: 99
 
 
+# prompt specific parameters
+prompt:
+    prompt_type: 7
+    prompt_pool: True
+    pool_size: 64
+    prompt_length: 10
+    top_k: 64
+    decouple: False
+    random_k: -1
+    stack_random_before: False
+    freeze_prevtask_prompts: False
+    sort: True
+    random_expand: False
+    force_select_new: False
+    temporal_pe: False
+    prompt_init: uniform
+    prompt_key: True
+    embed_dim: 128
+    embed_dim_prompt: 128
+    prompt_key_init: uniform
+    batchwise_prompt: False
+    embedding_key: query_cls
+    loss_coeff: 0.1

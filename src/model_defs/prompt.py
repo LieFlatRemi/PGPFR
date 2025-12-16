@@ -157,6 +157,9 @@ class Prompt(nn.Module):
                 # mean along top k as length already is req temporal sequence.
                 batched_prompt = torch.mean(batched_prompt_raw, 1)
 
+            else:
+                batched_prompt = batched_prompt_raw
+
             out['prompt_idx'] = idx
 
             # Debugging, return sim as well
@@ -192,8 +195,8 @@ class Prompt(nn.Module):
             # Proposed solution - simply ADD
             # 32 176 128
             batched_prompt = batched_prompt.permute(0, 2, 3, 1)
-            time_len = batched_prompt.shape[1]
-            joint_num = batched_prompt.shape[2]
+            time_len = batched_prompt.shape[2]
+            joint_num = batched_prompt.shape[1]
             batched_prompt = batched_prompt.view(-1, time_len * joint_num, self.embed_dim)
             out['prompted_embedding'] = batched_prompt + x_embed
 
@@ -223,7 +226,8 @@ class Prompt(nn.Module):
             x_embed = x_embed.view(B, BC, -1).permute(0, 2, 1)
 
             attn_output, _ = self.multihead_attn(x_embed, batched_prompt, batched_prompt)
-            out['prompted_embedding'] = attn_output.permute(0, 2, 1).view(B, BC, T, V)
+            # out['prompted_embedding'] = attn_output.permute(0, 2, 1).view(B, BC, T, V)
+            out['prompted_embedding'] = attn_output
 
         elif self.prompt_type == 350:
             '''

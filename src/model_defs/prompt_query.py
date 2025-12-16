@@ -1,18 +1,14 @@
-from .classifier import CosineContinualLinear
 from .prompt import Prompt
-from .prompt_query import QueryFn
 from .st_att_layer import *
 import torch.nn as nn
 import torch
 
-class Model(nn.Module):
+class QueryFn(nn.Module):
     def __init__(self, n_classes, config):
-        super(Model, self).__init__()
+        super(QueryFn, self).__init__()
 
         h_dim = 32
         h_num= 8
-
-        self.feature_dim = 128
 
         dp_rate = config.dropout
 
@@ -28,19 +24,12 @@ class Model(nn.Module):
 
         self.temporal_att = ST_ATT_Layer(input_size=128, output_size= 128,h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="temporal", time_len = 8)
 
-        self.prompt_query = QueryFn(n_classes, config)
-
-        self.prompt = Prompt(config)
-
-        # self.cls = nn.Linear(128, n_classes)
-        self.cls = self.generate_fc(128, config.first_split_size)
+        # query layer
+        self.query = nn.Linear(128, config.prompt.embed_dim)
 
     def forward(self, x):
         # input shape: [batch_size, time_len, joint_num, 3]
         # 32 8 22 3
-
-        # query
-        x_query = self.prompt_query(x)
 
         time_len = x.shape[1]
         joint_num = x.shape[2]
@@ -49,18 +38,14 @@ class Model(nn.Module):
         x = x.reshape(-1, time_len * joint_num, 3)
 
         # 32 176 128
-        raw = self.initial(x)
-
-        # 与prompt的key计算cos相似，prompt会与原始x求和
-        res = self.prompt(x_embed=raw, cls_features=x_query)
-        x = res['prompted_embedding']
-        reduce_sim = res['reduce_sim']
-
-        # 再重新经过backbone
+        x = self.initial(x)
+        # 32 128
         x = self.forward_feature(x)
 
-        pred = self.cls(x)
-        return pred, reduce_sim
+        # query
+        x_query = self.query(x)
+
+        return x_query # 32 176 128
 
     def forward_feature(self, x):
         # input [batch_size, 176, 128]
@@ -74,13 +59,3 @@ class Model(nn.Module):
         x = x.sum(1) / x.shape[1]
 
         return x
-
-    def update_fc(self, nb_classes, freeze_old=False):
-        if self.cls is None:
-            self.cls = self.generate_fc(self.feature_dim, nb_classes)
-        else:
-            self.cls.update(nb_classes, freeze_old=freeze_old)
-
-    def generate_fc(self, in_dim, out_dim):
-        cls = CosineContinualLinear(in_dim, out_dim)
-        return cls

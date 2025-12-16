@@ -22,7 +22,7 @@ for dataset_name in ${datasets[*]}; do
 
     for baseline_name in ${baselines[*]}; do
         ############################ Run baseline ############################
-        root_log_dir=/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/dataset/SHREC17
+        root_log_dir=/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/PGPFR-3/output/$dataset_name/$baseline_name
         n_trials=$n_trials
         n_tasks=$n_tasks
         run_driver

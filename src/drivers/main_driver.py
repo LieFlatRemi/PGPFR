@@ -20,7 +20,7 @@ sys.path.append(osp.join(*(['..'] * SUB_DIR_LEVEL)))
 import utils
 
 parser = argparse.ArgumentParser(description='Gesture Recognition.')
-parser.add_argument('--train', type=int, default=-1, required=False, help='train (1) or testval (0) or test (-1).')
+parser.add_argument('--train', type=int, default=1, required=False, help='train (1) or testval (0) or test (-1).')
 parser.add_argument('--dataset', type=str, default='hgr_shrec_2017', required=False, help='name of the dataset.')
 parser.add_argument('--split_type', type=str, default='agnostic', required=False,
                     help='type of data split (if applicable).')
@@ -66,7 +66,8 @@ def main_worker(gpu, n_gpus, args):
         'deep_inversion_gen': 'DeepInversion_gen',
         'abd': 'AlwaysBeDreaming',
         'rdfcil': 'Rdfcil',
-        'pgpfr': 'Pgpfr'
+        'pgpfr': 'Pgpfr',
+        'upat': 'UnifiedPromptAdapterTuning'
     }
 
     # Execute trial

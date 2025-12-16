@@ -2,7 +2,7 @@ in_channels: &in_channels 3
 seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
-workers: 4
+workers: 1
 total_epochs: 150
 total_epochs_incremental_task: 100
 #total_epochs: 15

@@ -1,3 +1,4 @@
+from .base import Base
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -21,32 +22,12 @@ from .helpers import *
 from functools import reduce
 from operator import mul
 
+now_gpu = 0
 
-now_gpu = 3
-
-class Base(object):
-
+class UnifiedPromptAdapterTuning(Base):
     def __init__(self, cfg, cfg_data, args, is_train, is_distributed, n_gpus):
-        self.cfg = cfg
-        self.cfg_data = cfg_data
-        self.args = args
-        self.is_train = is_train
-        self.is_distributed = is_distributed
-        self.n_gpus = n_gpus
-        self.previous_teacher = None
-        self.KD_replay = False
-        # highest class index from past task
-        self.last_valid_out_dim = 0
-        # highest class index from current task
-        self.valid_out_dim = 0
-        self.coreset_train = []
-        self.ic = True  # full coreset or append the same number of samples as in self.file_list
-        # synthetic data generation
-        self.gen_inverted_samples = False
-        self.previous_teacher = None
-        self.proto_mean = {}
-        self.proto_var = {}
-
+        super(UnifiedPromptAdapterTuning, self).__init__(cfg, cfg_data, args, is_train, is_distributed, n_gpus)
+        self.loss_func = nn.CrossEntropyLoss().to(self.args.gpu)
 
     def train(self, n_trial):
         print(f"Using GPU = {self.args.gpu} with (batch_size, workers) = ({self.cfg.batch_size}, {self.cfg.workers})")
@@ -54,7 +35,6 @@ class Base(object):
 
         self.cfg.num_total_classes = self.cfg_data.get_n_classes(self.args.split_type)
         # Load model
-        # self.model = model_defs.get_model(edict({'n_classes': self.cfg.num_total_classes, **self.cfg.model}))
         self.model = model_defs.get_model(edict({'n_classes': self.cfg.num_total_classes, **self.cfg.model}))
 
         # Class mapping vars
@@ -207,6 +187,10 @@ class Base(object):
                     print("Freezing feature extractor...")
                     self.freeze_model(feature_extractor=True)
 
+                # 扩展余弦分类器
+                if current_t_index > 0:
+                    self.model.update_fc(self.valid_out_dim)
+
                 # Freeze the weights for the previous classes in the classification layer if desired (from the second task onwards)
                 if current_t_index > 0 and self.cfg.increm.freeze_classifier:
                     # Copy the weights and biases of the final linear layer
@@ -285,7 +269,7 @@ class Base(object):
             # set to eval mode
             self.model.eval()
             # compute mean
-            self.save_proto(self.train_loader)
+            # self.save_proto(self.train_loader)
             # new teacher
             if self.cfg.increm.learner.type == 'deep_inversion' or self.cfg.increm.learner.type == 'abd':
                 self.sample_shape = (-1, self.cfg.seq_len, self.cfg.model.n_joints, self.cfg.in_channels)
@@ -361,18 +345,30 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
 
-            loss_tensors = []
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
 
-            for lname in self.criteria:
-                lfunc = self.criteria[lname].func
-                lweight = self.criteria[lname].weight
-                lval = lfunc(output, target)
-                losses[lname].update(lval.item(), output.size(0))
-                loss_tensors.append(lweight * lval)
+            # trick：设置前面任务的logit为-inf
+            if current_t_index > 0:
+                output[:, :self.valid_out_dim - self.cfg.increm.other_split_size] = -float('inf')
 
-            loss = sum(loss_tensors)
+            # loss_tensors = []
+            #
+            # for lname in self.criteria:
+            #     lfunc = self.criteria[lname].func
+            #     lweight = self.criteria[lname].weight
+            #     lval = lfunc(output, target)
+            #     losses[lname].update(lval.item(), output.size(0))
+            #     loss_tensors.append(lweight * lval)
+            #
+            # loss = sum(loss_tensors)
+            loss = self.loss_func(output, target)
+
+            prompt_loss = reduce_sim.sum()
+            # print('prompt loss : {} \t loss: {}'.format(prompt_loss, loss))
+            loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -451,7 +447,9 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
 
             loss_tensors = []
             for lname in self.criteria:
@@ -462,6 +460,9 @@ class Base(object):
                 loss_tensors.append(lweight * lval)
 
             loss = sum(loss_tensors)
+
+            prompt_loss = reduce_sim.sum()
+            loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
             val_acc = acc_meter(output, target) * 100
 
@@ -514,8 +515,12 @@ class Base(object):
             cfg.test_name = str(current_t_index)
             log_dir_task = osp.join(self.args.log_dir, f"task_{cfg.test_name}")
             print('======================', cfg.test_name, '=======================')
-            # Load model
-            self.model = model_defs.get_model(edict({'n_classes': cfg.num_total_classes, **cfg.model}))
+            # 初始模型
+            self.model = model_defs.get_model(edict({'n_classes': self.cfg.increm.first_split_size, **cfg.model}))
+            # 更新分类器
+            for idx in range(current_t_index):
+                self.model.update_fc(self.cfg.increm.first_split_size + idx + 1)
+
             model_defs.print_n_params(self.model)
             for test_mode in ['local', 'global', 'old', 'new']:
                 if current_t_index > 0:
@@ -603,7 +608,10 @@ class Base(object):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
-            output = self.model(pts)[:, :self.valid_out_dim]
+            # output = self.model(pts)[:, :self.valid_out_dim]
+            output, reduce_sim = self.model(pts)
+            output = output[:, :self.valid_out_dim]
+
             acc_meter.update(output, target)
             test_acc_ = acc_meter_torchmetrics(output, target) * 100
 
@@ -637,148 +645,24 @@ class Base(object):
         with open(osp.join(test_folder, f"test_metrics_{self.cfg.test_mode}.json"), 'w') as f:
             json.dump({'Acc': acc_all, 'Acc_torchmetrics': acc_all_torchmetrics.item()}, f, indent=4)
 
-    def save_accuracies_task(self):
-        # Save results for all tasks
-        metrics_dict = {}
-        metrics_dict['local'] = []
-        metrics_dict['global'] = []
-        metrics_dict['old'] = []
-        metrics_dict['new'] = []
-        metrics_dict['IFM'] = []
-        for task in range(self.cfg.increm.max_task):
-            test_folder = osp.join(self.args.log_dir, f"task_{task}", 'test')
-            for test_mode in ['local', 'global', 'old', 'new']:
-                with open(osp.join(test_folder, f"test_metrics_{test_mode}.json"), 'r') as f:
-                    metrics = json.load(f)
-                # 将result读入字典
-                metrics_dict[test_mode].append(metrics['Acc_torchmetrics'])
-
-        IFM_LIST = []
-        for i in range(self.cfg.increm.max_task):
-            IFM = abs(metrics_dict['local'][i] - metrics_dict['global'][i])/(metrics_dict['local'][i] + metrics_dict['global'][i]) * 100
-            IFM_LIST.append(IFM)
-            # print(IFM)
-            # store IFM
-        m_ifm = sum(IFM_LIST)/6
-        IFM_LIST.append(m_ifm)
-        m_g = sum(metrics_dict['global'])/len(metrics_dict['global'])
-        with open(osp.join(self.args.log_dir, "IFM.json"), "w") as json_file:
-            json.dump(IFM_LIST, json_file)
-        with open(osp.join(self.args.log_dir, "mean.json"), "w") as json_file:
-            json.dump(m_g, json_file)
-
-        # Save results in json files
-        for test_mode in ['local', 'global', 'old', 'new']:
-            with open(osp.join(self.args.log_dir, f"test_metrics_{test_mode}.json"), 'w') as f:
-                json.dump({'acc_metrics': metrics_dict[test_mode]}, f, indent=4)
-
-        # Save results in a single matplotlib figure
-        color_l = [(0.5, 0.5, 0.9), (0.9, 0.5, 0.5), (0.5, 0.9, 0.5), (0.9, 0.9, 0.5)]
-        fig, ax = plt.subplots()
-        x_index = range(1, self.cfg.increm.max_task + 1)
-
-        ax.plot(x_index, metrics_dict['local'], '-o', color=color_l[0])
-        ax.plot(x_index, metrics_dict['global'], '-o', color=color_l[1])
-        ax.plot(x_index, metrics_dict['old'], '-o', color=color_l[2])
-        ax.plot(x_index, metrics_dict['new'], '-o', color=color_l[3])
-
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-        ax.set_ylabel('% Accuracy', fontsize=14)
-        ax.set_xlabel('Task', fontsize=14)
-        plt.xticks(x_index)
-        ax.set_title('Accuracies per task', fontsize=16)
-        ax.legend(['local', 'global', 'old', 'new'])
-        plt.ylim([0, 105])
-
-        fig.tight_layout()
-        fig.savefig(osp.join(self.args.log_dir, 'accuracies_per_task.png'))
-        plt.close(fig)
-
     def freeze_model(self, feature_extractor=False, classifier=False):
         if feature_extractor:
             # Freeze initial layer
             for param in self.model.initial.parameters():
                 param.requires_grad = False
+            for param in self.model.prompt_query.initial.parameters():
+                param.requires_grad = False
             # Freeze spatial_att
             for param in self.model.spatial_att.parameters():
                 param.requires_grad = False
+            for param in self.model.prompt_query.spatial_att.parameters():
+                param.requires_grad = False
             # Freeze temporal_att
             for param in self.model.temporal_att.parameters():
+                param.requires_grad = False
+            for param in self.model.prompt_query.temporal_att.parameters():
                 param.requires_grad = False
         if classifier:
             # Freeze classifier
             for param in self.model.final.parameters():
                 param.requires_grad = False
-
-    @torch.no_grad()
-    def save_proto(self, train_loader, gpu=now_gpu):
-        # set to eval mode
-        self.model.eval();
-        vectors = {}
-        samples_per_class = {};
-        # dim, dtype = None, None;
-        n_batches = len(train_loader);
-
-        # ============= compute class-wise mean new ================ #
-        vbar = tqdm(total=len(train_loader), leave=True, desc='mean', dynamic_ncols=False);
-        vbar.refresh();
-        iter_loader = iter(train_loader);
-        bi = 1;
-
-        while bi <= n_batches:  # 统计每个class的样本个数，并计算proto
-            data = next(iter_loader);
-            # transfer data to gpu
-            utils.tensor_dict_to_cuda(data, gpu);
-            pts, target = data['pts'], data['label'];
-
-            for i, target_class in enumerate(target):
-                target[i] = self.cfg.class_mapping[str(target_class.item())]
-
-            features = self.model.forward_feature(pts);
-
-            output = self.model.final(features)   # [bs, n_classes]
-            output = torch.max(output, dim=1)[1]
-            for k in range(features.shape[0]):
-                feat, pred = features[k], output[k];
-                label = data['label'][k].item();
-                if label not in vectors:
-                    vectors[label] = []
-
-                vectors[label].append(features[k])
-                if label != pred:  # reject the sample
-                    continue;
-
-                dtype =feat.dtype;
-                # init class-wise mean
-                if label not in self.proto_mean:
-                    self.proto_mean[label] = torch.zeros((1, feat.shape[0]), dtype=dtype);
-                if label not in samples_per_class:
-                    samples_per_class[label] = 0;
-
-                self.proto_mean[label] = self.proto_mean[label].to(feat.device) + feat[None, :].to(feat.device);
-                samples_per_class[label] += 1;
-
-            vbar.update();
-            vbar.refresh();
-
-            bi += 1;
-
-        vbar.close();
-
-        for i in vectors.keys():
-            tensor = torch.cat(vectors[i]).view(-1, 128)
-            self.proto_var[i] = torch.cov(tensor.T)
-
-        # # normalize
-        for label in samples_per_class:
-            self.proto_mean[label] /= samples_per_class[label];
-
-    def _semantic_aug(self, proto_logits, proto_targets, N_cov, ratio):
-        weight_fc = self.model.final.weight[:self.valid_out_dim]
-        N, C, D = 64, self.valid_out_dim, weight_fc.shape[1]
-        N_weight = weight_fc.expand(N, C, D)  # NCD
-        N_target_weight = torch.gather(N_weight, 1, proto_targets[:, None, None].expand(N, C, D))  # NCD
-        N_v = N_weight - N_target_weight
-        proto_logits = proto_logits + ratio / 2 * torch.diagonal(N_v @ N_cov @ N_v.permute(0, 2, 1), dim1=1,
-                                                                 dim2=2)  # NC
-        return proto_logits
