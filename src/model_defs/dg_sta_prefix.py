@@ -35,12 +35,15 @@ class Model(nn.Module):
         # self.cls = nn.Linear(128, n_classes)
         self.cls = self.generate_fc(128, config.first_split_size)
 
+        self.query = nn.Linear(128, 128)
+
     def forward(self, x, cur_task=0, prompt=None):
         # input shape: [batch_size, time_len, joint_num, 3]
         # 32 8 22 3
 
-        # query
-        x_query = self.prompt_query(x)
+        if cur_task > 0:
+            # query
+            x_query = self.prompt_query(x)
 
         time_len = x.shape[1]
         joint_num = x.shape[2]
@@ -51,26 +54,35 @@ class Model(nn.Module):
         # 32 176 128
         raw = self.initial(x)
 
-        # 与prompt的key计算cos相似
-        res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query)
-        x = res['prompted_embedding']
-        reduce_sim = res['reduce_sim']
+        if cur_task > 0:
+            # 与prompt的key计算cos相似
+            res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query)
+            x = res['prompted_embedding']
+            prompt_s = res['spatial_prompt']
+            prompt_t = res['temporal_prompt']
+            reduce_sim = res['reduce_sim']
+            print(res['selected_prompts_dict'])
+        else:
+            x = raw
+            prompt_s = None
+            prompt_t = None
+            reduce_sim = torch.zeros(1, 1)
 
-        # print(res['selected_prompts_dict'])
+
 
         # 再重新经过backbone
-        x = self.forward_feature(x)
+        x = self.forward_feature(x, prompt_s, prompt_t)
 
         pred = self.cls(x)
         return pred, reduce_sim
 
-    def forward_feature(self, x):
+    def forward_feature(self, x, prompt_s=None, prompt_t=None):
         # input [batch_size, 176, 128]
 
         # spatal
-        x = self.spatial_att(x)
+        x = self.spatial_att(x, prompt_s)
         # temporal  # 32 176 128
-        x = self.temporal_att(x)
+        x = self.temporal_att(x, prompt_t)
 
         # mean
         x = x.sum(1) / x.shape[1]

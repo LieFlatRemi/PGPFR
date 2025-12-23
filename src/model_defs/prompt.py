@@ -36,23 +36,13 @@ class Prompt(nn.Module):
         self.prompt_type = config.prompt.prompt_type
         self.random_k = config.prompt.random_k
         self.random_prompts = None
-        # IL_step
-        self.cur_task = 0
         self.freeze_previous_task_prompts = config.prompt.freeze_prevtask_prompts
         self.random_expand = config.prompt.random_expand
         self.force_select_new = config.prompt.force_select_new
         self.stack_random_before = config.prompt.stack_random_before
         self.sort = config.prompt.sort
 
-
-        if self.random_k > 0 and self.cur_task > 0:
-            self.top_k = self.top_k - self.random_k
-
         self.decouple_prompting = config.prompt.decouple
-
-        if self.random_expand and self.random_k > 0:
-            self.pool_size = config.prompt.pool_size + self.cur_task * self.random_k
-            print(f're-init pool size as {self.pool_size} + {self.cur_task * self.random_k}')
 
         self.pool_dict = torch.zeros((self.pool_size)).cuda()
 
@@ -73,13 +63,60 @@ class Prompt(nn.Module):
 
         print(f'\n\n checksss inside prompt file pool size {self.prompt.size()}, key size {self.prompt_key.size()}')
 
+
+        # L2P 用于prompt和输入连接后转维度 176x2 -> 176
+        self.concat_fc = nn.Linear(self.top_k * self.length * 2, self.top_k * self.length)
+
+
+    def update_prompt(self):
+        if self.random_k <= 0:
+            return
+        # 新task，扩展random_k个prompt
+        device = self.prompt.device
+        dtype_prompt = self.prompt.dtype
+        dtype_key = self.prompt_key.dtype
+
+        # prompt
+        old_pool_size = self.pool_size
+        print(f're-init pool size as {self.pool_size} + {self.random_k}')
+        self.pool_size = self.pool_size + self.random_k
+        new_prompt = nn.Parameter(torch.empty(
+            self.pool_size, self.length, self.embed_dim_prompt,
+            device=device, dtype=dtype_prompt
+        ))
+        with torch.no_grad():
+            # 先拷贝旧 prompt
+            new_prompt[:old_pool_size].copy_(self.prompt.data)
+            # 末尾 random_k 个是新 task 的 prompt，随机初始化
+            nn.init.uniform_(new_prompt[old_pool_size:])
+
+        self.prompt = new_prompt
+
+        # key
+        key_shape = (self.pool_size, self.embed_dim)
+        new_key = nn.Parameter(torch.empty(
+            self.pool_size, self.embed_dim,
+            device=device, dtype=dtype_key
+        ))
+        with torch.no_grad():
+            new_key[:old_pool_size].copy_(self.prompt_key.data)
+            # 计算已有 keys 的均值
+            mean_key = self.prompt_key[:old_pool_size].mean(dim=0, keepdim=True)  # [1, embed_dim]
+            # 用均值初始化新 task 的所有 random_k 个 keys
+            new_key[old_pool_size:] = mean_key.expand(self.random_k, -1)  # [random_k, embed_dim]
+
+        self.prompt_key = new_key
+
+        self.pool_dict = torch.zeros((self.pool_size), device=device)
+
+
     def l2_normalize(self, x, dim=None, epsilon=1e-12):
         """Normalizes a given vector or matrix."""
         square_sum = torch.sum(x ** 2, dim=dim, keepdim=True)
         x_inv_norm = torch.rsqrt(torch.maximum(square_sum, torch.tensor(epsilon, device=x.device)))
         return x * x_inv_norm
 
-    def forward(self, x_embed, prompt_mask=None, cls_features=None, train_mode=1):
+    def forward(self, x_embed, prompt_mask=None, cur_task=0, cls_features=None, train_mode=1):
         '''
         cls_feat is the query function output, it will be used to curate promnpt.
         '''
@@ -88,7 +125,8 @@ class Prompt(nn.Module):
         self.pool_dict = torch.zeros((self.pool_size)).to(device)
 
         if self.prompt_pool:
-            if self.freeze_previous_task_prompts and self.cur_task > 0:
+            # 是否冻结过去task的prompt
+            if self.freeze_previous_task_prompts and cur_task > 0 and self.random_k > 0 and train_mode == 1:
                 previous_prompt_tracker = self.pool_size - self.random_k
                 prompt = torch.cat((self.prompt[:previous_prompt_tracker, :, :].detach(),
                                     self.prompt[previous_prompt_tracker:, :, :]), dim=0)
@@ -112,22 +150,23 @@ class Prompt(nn.Module):
                 _, idx = torch.topk(similarity, k=self.top_k, dim=1)
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
                 batched_prompt_raw = prompt[idx]  # B, top_k, length, C
+                self.pool_dict[prompt_id] += id_counts.to(device)
 
             elif not self.decouple_prompting:
                 Batch_size = similarity.size(0)
                 use_similarity = similarity
                 selected_keys = torch.zeros(similarity.size()).to(device)
 
-                if self.force_select_new and train_mode == 1 and self.cur_task > 0 and self.random_k > 0:
+                if self.force_select_new and train_mode == 1 and cur_task > 0 and self.random_k > 0:
                     new_idx = torch.arange(self.pool_size)[-self.random_k:].to(device)
                     new_idx = torch.broadcast_to(new_idx, (B, self.random_k))
-                    _, idx = torch.topk(use_similarity[:, :-self.random_k], k=self.top_k, dim=1, sorted=True)
+                    _, idx = torch.topk(use_similarity[:, :-self.random_k], k=self.top_k - self.random_k, dim=1, sorted=True)
                     idx = torch.cat((idx, new_idx), 1)
                 else:
                     if self.sort:
-                        _, idx = torch.topk(use_similarity, k=self.required_k, dim=1, sorted=True)
+                        _, idx = torch.topk(use_similarity, k=self.top_k, dim=1, sorted=True)
                     else:
-                        _, idx = torch.topk(use_similarity, k=self.required_k, dim=1, sorted=False)
+                        _, idx = torch.topk(use_similarity, k=self.top_k, dim=1, sorted=False)
 
                 # 统计每个prompt被选中的次数
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
@@ -138,9 +177,10 @@ class Prompt(nn.Module):
 
                 # 不保留 selected_keys 的梯度
                 selected_keys = (selected_keys - use_similarity).detach() + use_similarity
+                # 保留selected_keys选择的prompt
                 batched_prompt_ = selected_keys.unsqueeze(2).unsqueeze(3) * prompt.unsqueeze(
                     0)  # torch.Size([32, 16, 22, 128]) for SHREC ? 32 8 22 128
-                batched_prompt_raw = torch.zeros((Batch_size, self.required_k, self.length, self.embed_dim_prompt)).to(
+                batched_prompt_raw = torch.zeros((Batch_size, self.top_k, self.length, self.embed_dim_prompt)).to(
                     device)
 
                 for b in range(Batch_size):
@@ -148,9 +188,10 @@ class Prompt(nn.Module):
 
             batch_size, top_k, length, c = batched_prompt_raw.shape
 
-            if self.prompt_type in [7, 17, 100, 200, 300, 27]:
+            if self.prompt_type in [7, 17, 100, 200, 300, 27, 1206]:
                 # batched_prompt_raw (N*M, T, V, Base_channels)
                 # L1 output size:(N*M, Base_channels, T, V)
+                # 32 128 8 22
                 batched_prompt = batched_prompt_raw.permute(0, 3, 1, 2)
 
             elif self.prompt_type == 24:
@@ -193,11 +234,9 @@ class Prompt(nn.Module):
 
         if self.prompt_type in [7, 24]:
             # Proposed solution - simply ADD
-            # 32 176 128
             batched_prompt = batched_prompt.permute(0, 2, 3, 1)
-            time_len = batched_prompt.shape[2]
-            joint_num = batched_prompt.shape[1]
-            batched_prompt = batched_prompt.view(-1, time_len * joint_num, self.embed_dim)
+            # 32 176 128
+            batched_prompt = batched_prompt.view(-1, batched_prompt.shape[1] * batched_prompt.shape[2], self.embed_dim)
             out['prompted_embedding'] = batched_prompt + x_embed
 
         elif self.prompt_type == 27:
@@ -207,7 +246,13 @@ class Prompt(nn.Module):
 
         elif self.prompt_type == 100:
             # concat along feature dimension (base channel)
-            out['prompted_embedding'] = torch.cat((x_embed, batched_prompt), dim=1)
+            batched_prompt = batched_prompt.permute(0, 2, 3, 1)
+            # 32 176 128
+            batched_prompt = batched_prompt.view(-1, batched_prompt.shape[1] * batched_prompt.shape[2], self.embed_dim)
+            x_concat = torch.cat((x_embed, batched_prompt), dim=1)
+            x_concat_t = x_concat.transpose(1, 2)
+            # 降维
+            out['prompted_embedding'] = self.concat_fc(x_concat_t).transpose(1, 2)
 
         elif self.prompt_type == 200:
             # concat along time dimension
@@ -259,6 +304,19 @@ class Prompt(nn.Module):
 
             attn_output, _ = self.multihead_attn(x_embed, batched_prompt, batched_prompt)
             out['prompted_embedding'] = attn_output.view(batch_size, T, BC, V).permute(0, 2, 1, 3)
+
+        elif self.prompt_type == 1206:
+            # prefix prompt tuning
+            # batch_size top_k prompt_len prompt_dim
+            batched_prompt = batched_prompt.permute(0, 2, 3, 1)
+            p_num = batched_prompt.shape[1]
+            p_len = batched_prompt.shape[2]
+            T = int(p_len / 2)
+            prompt_s = batched_prompt[:, :, :T, :].reshape(-1, p_num * T, self.embed_dim)
+            prompt_t = batched_prompt[:, :, T:, :].reshape(-1, p_num * T, self.embed_dim)
+            out['prompted_embedding'] = x_embed
+            out['spatial_prompt'] = prompt_s
+            out['temporal_prompt'] = prompt_t
 
         out['selected_prompts_dict'] = self.pool_dict
 

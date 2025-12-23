@@ -2,17 +2,19 @@ try :
     from . import dg_sta
     from . import dg_sta_BN
     from . import dg_sta_upat
+    from . import dg_sta_prefix
     from .helpers import print_n_params
 except :
     import dg_sta
     import dg_sta_BN
+    import dg_sta_prefix, dg_sta_upat
     from helpers import print_n_params
 
 def get_model(cfg) :
     assert cfg.name in globals(), \
         f"Model {cfg.name} not found."
 
-    if cfg.name == 'dg_sta_upat':
+    if cfg.name == 'dg_sta_upat' or cfg.name == 'dg_sta_prefix':
         return globals()[cfg.name].Model(
             n_classes=cfg.n_classes,
             config=cfg

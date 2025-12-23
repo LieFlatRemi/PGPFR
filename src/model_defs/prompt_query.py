@@ -45,7 +45,7 @@ class QueryFn(nn.Module):
         # query
         x_query = self.query(x)
 
-        return x_query # 32 176 128
+        return x_query # 32 128
 
     def forward_feature(self, x):
         # input [batch_size, 176, 128]

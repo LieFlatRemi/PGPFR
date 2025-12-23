@@ -1,3 +1,7 @@
+# decouple
+# random_k
+# prompt_type
+
 in_channels: &in_channels 3
 seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
@@ -12,7 +16,8 @@ log_freq:
     val: null
 
 model:
-    name: 'dg_sta_upat'
+    # name: 'dg_sta_upat'
+    name: 'dg_sta_prefix'
     in_channels: *in_channels
     n_heads: 8 # number of attention heads
     d_head: 32 # dimension of attention heads
@@ -22,23 +27,24 @@ model:
     dropout: 0.2
     num_classes: 14
     first_split_size: 8
-    other_split_size: 1
     # prompt specific parameters
-    # prompt_length -> frames shrec 22
-    # top_k -> joints shrec 8
+    # prompt_length -> joints shrec 22
+    # top_k -> frames shrec 8
     prompt:
-        prompt_type: 7
+        prompt_type: 1206
+#        prompt_type: 100    # L2P
         prompt_pool: True
-        pool_size: 10
-        prompt_length: 22
-        top_k: 8
+        pool_size: 20
+        prompt_length: 40
+        top_k: 5
         decouple: False
         random_k: -1
+        # random_k: 2
         stack_random_before: False
-        freeze_prevtask_prompts: False
+        freeze_prevtask_prompts: True
         sort: True
         random_expand: False
-        force_select_new: False
+        force_select_new: True
         temporal_pe: False
         prompt_init: uniform
         prompt_key: True
@@ -115,8 +121,10 @@ optimizer:
 increm:
     load_pretrained_task0: False
     first_split_size: 8
-    other_split_size: 1
-    max_task: 7
+    other_split_size: 2
+    max_task: 4
+    # other_split_size: 1
+    # max_task: 7
     load_best_checkpoint_train: True  # Only for task_id == 1
     load_best_checkpoint_test: True # Only for task_id == 1
     freeze_feature_extractor: True

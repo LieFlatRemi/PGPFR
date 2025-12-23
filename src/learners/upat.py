@@ -149,6 +149,14 @@ class UnifiedPromptAdapterTuning(Base):
                                                    self.cfg.increm.learner.inversion_batch_size, self.cfg.batch_size,
                                                    log_dir_task, self.args.log_dir)
 
+                # 扩展Prompt Pool
+                if current_t_index > 0:
+                    self.model.prompt.update_prompt()
+
+                # 扩展余弦分类器
+                if current_t_index > 0:
+                    self.model.update_fc(self.cfg.increm.other_split_size)
+
                 # Modify the base LR if current_task_index > 0
                 if current_t_index > 0:
                     self.cfg.optimizer.lr = self.cfg.optimizer.lr_incremental_task
@@ -173,7 +181,7 @@ class UnifiedPromptAdapterTuning(Base):
                     start_epoch = checkpoint['epoch'] + 1
                     if start_epoch >= total_epochs_task:
                         print(f"Start epoch {start_epoch} is greater than total epochs {total_epochs_task}")
-                        sys.exit()
+                        # sys.exit()
                     utils.load_state_dict_single(checkpoint['state_dict'], self.model, self.optimizer, self.scheduler, )
                     print(f"=> loaded checkpoint for epoch {checkpoint['epoch']}")
                     del checkpoint
@@ -186,10 +194,6 @@ class UnifiedPromptAdapterTuning(Base):
                 if current_t_index > 0 and self.cfg.increm.freeze_feature_extractor:
                     print("Freezing feature extractor...")
                     self.freeze_model(feature_extractor=True)
-
-                # 扩展余弦分类器
-                if current_t_index > 0:
-                    self.model.update_fc(self.valid_out_dim)
 
                 # Freeze the weights for the previous classes in the classification layer if desired (from the second task onwards)
                 if current_t_index > 0 and self.cfg.increm.freeze_classifier:
@@ -268,31 +272,6 @@ class UnifiedPromptAdapterTuning(Base):
 
             # set to eval mode
             self.model.eval()
-            # compute mean
-            # self.save_proto(self.train_loader)
-            # new teacher
-            if self.cfg.increm.learner.type == 'deep_inversion' or self.cfg.increm.learner.type == 'abd':
-                self.sample_shape = (-1, self.cfg.seq_len, self.cfg.model.n_joints, self.cfg.in_channels)
-                self.previous_teacher = Teacher_v2(solver=copy.deepcopy(self.model),
-                                                   sample_shape=self.sample_shape,
-                                                   iters=self.power_iters,
-                                                   deep_inv_params=self.deep_inv_params,
-                                                   class_idx=np.arange(self.valid_out_dim),
-                                                   num_inverted_class=self.add_classes,
-                                                   num_known_classes=self.known_classes,
-                                                   config=self.cfg)
-                self.previous_linear = copy.deepcopy(self.model.final)
-                self.gen_inverted_samples = True
-                self.inversion_replay = True
-
-            else:
-                self.previous_teacher = Teacher_v1(solver=copy.deepcopy(self.model))
-
-            # Update coreset for train/val datasets if memory > 0
-            if self.cfg.increm.memory > 0:
-                self.coreset_train = self.train_dataset.update_coreset(self.coreset_train, self.cfg.increm.memory,
-                                                                       np.arange(self.last_valid_out_dim),
-                                                                       self.cfg.class_mapping)
 
             if self.args.gpu == now_gpu and not (current_t_index == 0 and self.cfg.increm.load_pretrained_task0):
                 ebar.close()
@@ -347,23 +326,13 @@ class UnifiedPromptAdapterTuning(Base):
 
             # output = self.model(pts)[:, :self.valid_out_dim]
 
-            output, reduce_sim = self.model(pts)
+            output, reduce_sim = self.model(x=pts, cur_task=current_t_index)
             output = output[:, :self.valid_out_dim]
 
             # trick：设置前面任务的logit为-inf
-            if current_t_index > 0:
-                output[:, :self.valid_out_dim - self.cfg.increm.other_split_size] = -float('inf')
+            # if current_t_index > 0:
+            #     output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
 
-            # loss_tensors = []
-            #
-            # for lname in self.criteria:
-            #     lfunc = self.criteria[lname].func
-            #     lweight = self.criteria[lname].weight
-            #     lval = lfunc(output, target)
-            #     losses[lname].update(lval.item(), output.size(0))
-            #     loss_tensors.append(lweight * lval)
-            #
-            # loss = sum(loss_tensors)
             loss = self.loss_func(output, target)
 
             prompt_loss = reduce_sim.sum()
@@ -374,6 +343,10 @@ class UnifiedPromptAdapterTuning(Base):
             loss.backward()
 
             self.optimizer.step()
+
+            # # 检查参数更新
+            # if bi == 1 and epoch == 1:
+            #     self.check_params_update()
 
             if current_t_index > 0 and self.cfg.increm.freeze_classifier:
                 # Restore the weights and biases for previous classes
@@ -451,15 +424,16 @@ class UnifiedPromptAdapterTuning(Base):
             output, reduce_sim = self.model(pts)
             output = output[:, :self.valid_out_dim]
 
-            loss_tensors = []
-            for lname in self.criteria:
-                lfunc = self.criteria[lname].func
-                lweight = self.criteria[lname].weight
-                lval = lfunc(output, target)
-                losses[lname].update(lval.item(), output.size(0))
-                loss_tensors.append(lweight * lval)
-
-            loss = sum(loss_tensors)
+            # loss_tensors = []
+            # for lname in self.criteria:
+            #     lfunc = self.criteria[lname].func
+            #     lweight = self.criteria[lname].weight
+            #     lval = lfunc(output, target)
+            #     losses[lname].update(lval.item(), output.size(0))
+            #     loss_tensors.append(lweight * lval)
+            #
+            # loss = sum(loss_tensors)
+            loss = self.loss_func(output, target)
 
             prompt_loss = reduce_sim.sum()
             loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
@@ -505,6 +479,8 @@ class UnifiedPromptAdapterTuning(Base):
         # load config
         cfg = utils.stdio.load_pickle(osp.join(self.args.log_dir, 'config.pkl'))
 
+        self.model = model_defs.get_model(edict({'n_classes': self.cfg.increm.first_split_size, **cfg.model}))
+
         # Test each task
         for current_t_index in range(cfg.increm.max_task):
             if current_t_index > 0:
@@ -515,11 +491,12 @@ class UnifiedPromptAdapterTuning(Base):
             cfg.test_name = str(current_t_index)
             log_dir_task = osp.join(self.args.log_dir, f"task_{cfg.test_name}")
             print('======================', cfg.test_name, '=======================')
-            # 初始模型
-            self.model = model_defs.get_model(edict({'n_classes': self.cfg.increm.first_split_size, **cfg.model}))
-            # 更新分类器
-            for idx in range(current_t_index):
-                self.model.update_fc(self.cfg.increm.first_split_size + idx + 1)
+
+            if current_t_index > 0:
+                # 更新分类器
+                self.model.update_fc(self.cfg.increm.other_split_size)
+                # 如果prompt是逐增的，增加prompt
+                self.model.prompt.update_prompt()
 
             model_defs.print_n_params(self.model)
             for test_mode in ['local', 'global', 'old', 'new']:
@@ -645,6 +622,68 @@ class UnifiedPromptAdapterTuning(Base):
         with open(osp.join(test_folder, f"test_metrics_{self.cfg.test_mode}.json"), 'w') as f:
             json.dump({'Acc': acc_all, 'Acc_torchmetrics': acc_all_torchmetrics.item()}, f, indent=4)
 
+    @torch.no_grad()
+    def check_params_update(self):
+        print("\n" + "=" * 80)
+        print("检查参与更新的参数:")
+        print("=" * 80)
+
+        trainable_params = []
+        frozen_params = []
+        params_with_grad = []
+        params_without_grad = []
+
+        for name, param in self.model.named_parameters():
+            info = {
+                'name': name,
+                'shape': tuple(param.shape),
+                'requires_grad': param.requires_grad,
+                'has_grad': param.grad is not None,
+                'grad_norm': param.grad.norm().item() if param.grad is not None else 0.0
+            }
+
+            if param.requires_grad:
+                trainable_params.append(info)
+                if param.grad is not None:
+                    params_with_grad.append(info)
+                else:
+                    params_without_grad.append(info)
+            else:
+                frozen_params.append(info)
+
+        print(f"\n可训练参数总数: {len(trainable_params)}")
+        print(f"有梯度的参数: {len(params_with_grad)}")
+        print(f"无梯度的参数: {len(params_without_grad)}")
+        print(f"冻结的参数: {len(frozen_params)}")
+
+        print("\n--- 可训练且有梯度的参数 ---")
+        for info in sorted(params_with_grad, key=lambda x: x['grad_norm'], reverse=True)[:20]:  # 只显示前20个
+            print(f"{info['name']:60s} | shape: {str(info['shape']):30s} | grad_norm: {info['grad_norm']:.6f}")
+
+        if len(params_with_grad) > 20:
+            print(f"... 还有 {len(params_with_grad) - 20} 个参数有梯度")
+
+        print("\n--- 可训练但无梯度的参数（可能有问题！）---")
+        if params_without_grad:
+            for info in params_without_grad:
+                print(f"{info['name']:60s} | shape: {str(info['shape']):30s}")
+        else:
+            print("无")
+
+        print("\n--- 关键组件参数检查 ---")
+        key_components = ['prompt', 'cls', 'query', 'initial', 'spatial_att', 'temporal_att']
+        for component in key_components:
+            component_params = [info for info in trainable_params if component in info['name']]
+            if component_params:
+                print(f"\n{component.upper()} 组件:")
+                total_grad_norm = sum(info['grad_norm'] for info in component_params if info['has_grad'])
+                print(f"  参数数量: {len(component_params)}, 总梯度范数: {total_grad_norm:.6f}")
+                for info in component_params[:5]:  # 只显示前5个
+                    status = "✓有梯度" if info['has_grad'] else "✗无梯度"
+                    print(f"    {info['name']:50s} | {status} | grad_norm: {info['grad_norm']:.6f}")
+
+        print("\n" + "=" * 80 + "\n")
+
     def freeze_model(self, feature_extractor=False, classifier=False):
         if feature_extractor:
             # Freeze initial layer
@@ -662,6 +701,7 @@ class UnifiedPromptAdapterTuning(Base):
                 param.requires_grad = False
             for param in self.model.prompt_query.temporal_att.parameters():
                 param.requires_grad = False
+            print('freeze feature extractor')
         if classifier:
             # Freeze classifier
             for param in self.model.final.parameters():

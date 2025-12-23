@@ -2,9 +2,9 @@ in_channels: &in_channels 3
 seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
-workers: 4
-total_epochs: 150
-total_epochs_incremental_task: 100
+workers: 1
+total_epochs: 30
+total_epochs_incremental_task: 10
 #total_epochs: 15
 #total_epochs_incremental_task: 10
 step_per_epoch: &step_per_epoch On
@@ -22,6 +22,7 @@ model:
     seq_len: *seq_len # sequence length
     n_joints: 22 # number of joints
     dropout: 0.5
+    num_classes: 14
 
 
 transforms:
@@ -85,7 +86,11 @@ optimizer:
         start_factor: 1
         end_factor: 0.001
         step_per_batch: *step_per_batch
-        step_per_epoch: *step_per_epoch      
+        step_per_epoch: *step_per_epoch
+    query:
+        query_lr: 0.01
+        dropout: 0.2
+        fc_adaptor: True
           
 
 increm:
@@ -106,3 +111,27 @@ increm:
         deep_inv_params: [0.1, 50, 0.001, 10, 1, -0.5, 5]  
         inversion_batch_size: 128
         inverted_acc_thred: 99
+
+
+# prompt specific parameters
+prompt:
+    prompt_type: 7
+    prompt_pool: True
+    pool_size: 64
+    prompt_length: 10
+    top_k: 64
+    decouple: False
+    random_k: -1
+    stack_random_before: False
+    freeze_prevtask_prompts: False
+    sort: True
+    random_expand: False
+    force_select_new: False
+    temporal_pe: False
+    prompt_init: uniform
+    prompt_key: True
+    embed_dim: 128
+    embed_dim_prompt: 128
+    prompt_key_init: uniform
+    batchwise_prompt: False
+    embedding_key: query_cls

@@ -126,7 +126,7 @@ class MultiHeadedAttention(nn.Module):
 
 
 
-    def attention(self,query, key, value):
+    def attention(self,query, key, value, mask_prompt_len=0):
         "Compute 'Scaled Dot Product Attention'"
         # [batch, time, ft_dim)
         d_k = query.size(-1)
@@ -134,12 +134,21 @@ class MultiHeadedAttention(nn.Module):
                  / math.sqrt(d_k)
         if self.domain is not None:
             #section 3.4 spatial temporal mask operation
+            mask = None
             if self.domain == "temporal":
-                scores *= self.t_mask  # set weight to 0 to block gradient
-                scores += (1 - self.t_mask) * (-9e15)  # set weight to -inf to remove effect in Softmax
+                mask = self.t_mask
             elif self.domain == "spatial":
-                scores *= self.s_mask  # set weight to 0 to block gradient
-                scores += (1 - self.s_mask) * (-9e15)  # set weight to -inf to remove effect in Softmax
+                mask = self.s_mask
+            
+            # 在mask中连接一个新的全1矩阵，用于在连接prompt时正常计算mask
+            if mask_prompt_len > 0:
+                T = mask.size(0)
+                if scores.size(-2) == T:
+                    pad = torch.ones(T, mask_prompt_len).to(mask.device)
+                    mask = torch.cat([mask, pad], dim=1)
+
+            scores *= mask  # set weight to 0 to block gradient
+            scores += (1 - mask) * (-9e15)  # set weight to -inf to remove effect in Softmax
 
         # apply weight_mask to bolck information passage between ineer-joint
 
@@ -147,18 +156,32 @@ class MultiHeadedAttention(nn.Module):
 
         return torch.matmul(p_attn, value), p_attn
 
-    def forward(self, x):
+    def forward(self, x, prompt=None):
         "Implements Figure 2"
         nbatches = x.size(0) # [batch, t, dim]
         # 1) Do all the linear projections in batch from d_model => h x d_k
 
         query = self.query_map(x).view(nbatches, -1, self.h_num, self.h_dim).transpose(1, 2)
-        key = self.key_map(x).view(nbatches, -1, self.h_num, self.h_dim).transpose(1, 2)
-        value = self.value_map(x).view(nbatches, -1, self.h_num, self.h_dim).transpose(1, 2)
+        
+        if prompt is not None:
+            prompt_len = int(prompt.shape[1] / 2)
+            prompt_k = prompt[:, :prompt_len, :]
+            prompt_v = prompt[:, prompt_len:, :]
+            # [batch, p_len, dim]
+            x_k = torch.cat((x, prompt_k), dim=1)
+            x_v = torch.cat((x, prompt_v), dim=1)
+            mask_prompt_len = prompt_len
+        else:
+            x_k = x
+            x_v = x
+            mask_prompt_len = 0
+
+        key = self.key_map(x_k).view(nbatches, -1, self.h_num, self.h_dim).transpose(1, 2)
+        value = self.value_map(x_v).view(nbatches, -1, self.h_num, self.h_dim).transpose(1, 2)
 
 
         # 2) Apply attention on all the projected vectors in batch.
-        x, self.attn = self.attention(query, key, value) #[batch, h_num, T, h_dim ]
+        x, self.attn = self.attention(query, key, value, mask_prompt_len=mask_prompt_len) #[batch, h_num, T, h_dim ]
 
             # 3) "Concat" using a view and apply a final linear.
         x = x.transpose(1, 2).contiguous() \
@@ -197,17 +220,10 @@ class ST_ATT_Layer(nn.Module):
 
         self.init_parameters()
 
-
-
-
-
-
-
-
-    def forward(self, x):
+    def forward(self, x, prompt=None):
 
         x = self.pe(x) #add PE
-        x = self.attn(x) #pass attention model
+        x = self.attn(x, prompt=prompt) #pass attention model
         x = self.ft_map(x)
         return x
 

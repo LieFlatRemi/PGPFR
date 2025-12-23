@@ -55,7 +55,10 @@ optimizer:
         start_factor: 1
         end_factor: 0.001
         step_per_batch: *step_per_batch
-        step_per_epoch: *step_per_epoch      
+        step_per_epoch: *step_per_epoch
+    query:
+        query_lr: 0.01
+        dropout: 0.2
           
 
 increm:
@@ -70,4 +73,28 @@ increm:
     memory: 0
     learner:
         type: 'base'
+
+
+# prompt specific parameters
+prompt:
+    prompt_type: 7
+    prompt_pool: True
+    pool_size: 64
+    prompt_length: 25
+    top_k: 64
+    decouple: False
+    random_k: -1
+    stack_random_before: False
+    freeze_prevtask_prompts: False
+    sort: True
+    random_expand: False
+    force_select_new: False
+    temporal_pe: False
+    prompt_init: uniform
+    prompt_key: True
+    embed_dim: 64
+    embed_dim_prompt: 64
+    prompt_key_init: uniform
+    batchwise_prompt: False
+    embedding_key: query_cls
 
