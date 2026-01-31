@@ -1,3 +1,4 @@
+from .adapter import Adapter
 from .classifier import CosineContinualLinear, SimpleContinualLinear
 from .prompt import Prompt
 from .prompt_query import QueryFn
@@ -28,14 +29,17 @@ class Model(nn.Module):
 
         self.temporal_att = ST_ATT_Layer(input_size=128, output_size= 128,h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="temporal", time_len = 8)
 
-        self.prompt_query = QueryFn(n_classes, config)
+        # self.prompt_query = QueryFn(n_classes, config)
+        #
+        # self.prompt = Prompt(config)
 
-        self.prompt = Prompt(config)
+        self.spatial_adapter = Adapter(in_dim=128, out_dim=64, dropout=0.0, init_option="lora",
+                 adapter_scalar="0.5", adapter_layernorm_option="in")
+        self.temporal_adapter = Adapter(in_dim=128, out_dim=64, dropout=0.0, init_option="lora",
+                 adapter_scalar="0.5", adapter_layernorm_option="in")
 
         # self.cls = nn.Linear(128, n_classes)
         self.cls = self.generate_fc(128, config.first_split_size)
-
-        self.query = nn.Linear(128, 128)
 
     def forward(self, x, cur_task=0, prompt=None):
         # input shape: [batch_size, time_len, joint_num, 3]
@@ -48,36 +52,29 @@ class Model(nn.Module):
         x = x.reshape(-1, time_len * joint_num, 3)
 
         # 32 176 128
-        raw = self.initial(x)
+        x = self.initial(x)
 
-        # if cur_task > 0:
-        x_query = self.forward_feature(raw, None, None)
-        # 与prompt的key计算cos相似
-        res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query)
-        x = res['prompted_embedding']
-        prompt_s = res['spatial_prompt']
-        prompt_t = res['temporal_prompt']
-        reduce_sim = res['reduce_sim']
-        print(res['selected_prompts_dict'])
-        # else:
-        #     x = raw
-        #     prompt_s = None
-        #     prompt_t = None
-        #     reduce_sim = torch.zeros(1, 1)
+        reduce_sim = np.array([0.0])
 
-        # 再重新经过backbone
-        x = self.forward_feature(x, prompt_s, prompt_t)
+        x = self.forward_feature(x)
 
         pred = self.cls(x)
         return pred, reduce_sim
 
-    def forward_feature(self, x, prompt_s=None, prompt_t=None):
+    def forward_feature(self, x):
         # input [batch_size, 176, 128]
 
         # spatal
-        x = self.spatial_att(x, prompt_s)
+        x = self.spatial_att(x)
+
+        # sp-adapter
+        x = self.spatial_adapter(x)
+
         # temporal  # 32 176 128
-        x = self.temporal_att(x, prompt_t)
+        x = self.temporal_att(x)
+
+        # te-adapter
+        x = self.temporal_adapter(x)
 
         # mean
         x = x.sum(1) / x.shape[1]

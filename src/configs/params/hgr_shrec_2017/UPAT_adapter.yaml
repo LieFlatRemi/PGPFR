@@ -7,8 +7,8 @@ seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
 workers: 1
-total_epochs: 100
-total_epochs_incremental_task: 100
+total_epochs: 150
+total_epochs_incremental_task: 50
 step_per_epoch: &step_per_epoch On
 step_per_batch: &step_per_batch Off
 log_freq:
@@ -16,7 +16,7 @@ log_freq:
     val: null
 
 model:
-    name: 'dg_sta_upat'
+    name: 'dg_sta_adapter'
     in_channels: *in_channels
     n_heads: 8 # number of attention heads
     d_head: 32 # dimension of attention heads
@@ -30,13 +30,14 @@ model:
     # prompt_length -> joints shrec 22
     # top_k -> frames shrec 8
     prompt:
-        prompt_type: 7    # offset
+        prompt_type: 1206   # 时间空间 prefix
         prompt_pool: True
-        pool_size: 8
-        prompt_length: 22
-        top_k: 8
+        pool_size: 10
+        prompt_length: 40
+        top_k: 10
         decouple: False
-        random_k: 2        # 是否增加 prompt
+#        random_k: -1
+        random_k: 5
         stack_random_before: False
         freeze_prevtask_prompts: True
         sort: True

@@ -1,32 +1,59 @@
 from .classifier import CosineContinualLinear, SimpleContinualLinear
+from .dg_sta_BN import SpatioTemporalAttention as st_layer_bn
+from .dg_sta import SpatioTemporalAttention as st_layer
 from .prompt import Prompt
 from .prompt_query import QueryFn
 from .st_att_layer import *
 import torch.nn as nn
 import torch
+from functools import partial
 
 class Model(nn.Module):
     def __init__(self, n_classes, config):
         super(Model, self).__init__()
 
-        h_dim = 32
-        h_num= 8
+        d_head = config.d_head      # h_dim
+        n_heads= config.n_heads       # h_num
+        n_joints = config.n_joints
+        seq_len = config.seq_len
+        d_feat = config.d_feat
+        in_channels = config.in_channels
 
-        self.feature_dim = 128
+        self.feature_dim = config.d_feat
 
         dp_rate = config.dropout
 
+        st_layer = partial(st_layer_bn,
+                           d_in=d_feat,
+                           d_out=d_feat,
+                           n_heads=n_heads,
+                           d_head=d_head,
+                           seq_len=seq_len,
+                           n_joints=n_joints,
+                           dropout=dp_rate,
+                           )
+
         self.initial = nn.Sequential(
-            nn.Linear(3, 128),
+            nn.Linear(in_channels, d_feat),
             nn.ReLU(),
-            LayerNorm(128),
+            # LayerNorm(d_feat),
+            nn.BatchNorm1d(seq_len * n_joints),
             nn.Dropout(dp_rate),
         )
-        #input_size, h_num, h_dim, dp_rate, time_len, domain
-        self.spatial_att = ST_ATT_Layer(input_size=128,output_size= 128, h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="spatial", time_len = 8)
+        self.spatial_att = st_layer(dom_type='spatial')
+        self.temporal_att = st_layer(dom_type='temporal')
 
-
-        self.temporal_att = ST_ATT_Layer(input_size=128, output_size= 128,h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="temporal", time_len = 8)
+        # self.initial = nn.Sequential(
+        #     nn.Linear(3, 128),
+        #     nn.ReLU(),
+        #     LayerNorm(128),
+        #     nn.Dropout(dp_rate),
+        # )
+        # #input_size, h_num, h_dim, dp_rate, time_len, domain
+        # self.spatial_att = ST_ATT_Layer(input_size=128,output_size= 128, h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="spatial", time_len = 8)
+        #
+        #
+        # self.temporal_att = ST_ATT_Layer(input_size=128, output_size= 128,h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="temporal", time_len = 8)
 
         self.prompt_query = QueryFn(n_classes, config)
 
@@ -40,25 +67,34 @@ class Model(nn.Module):
         # 32 8 22 3
 
         # query
-        x_query = self.prompt_query(x)
+        # x_query = self.prompt_query(x)
 
         time_len = x.shape[1]
         joint_num = x.shape[2]
 
-        # reshape x     32 176 3
-        x = x.reshape(-1, time_len * joint_num, 3)
+        # # reshape x     32 176 3
+        # x = x.reshape(-1, time_len * joint_num, 3)
+        #
+        # # 32 176 128
+        # raw = self.initial(x)
 
-        # 32 176 128
+        # x_query = self.forward_feature(raw)
+
+        """
+         先经过init 整合offset prompt 后 再整合为三维  
+        """
+        x = x.reshape(-1, time_len * joint_num, 3)
+        # 32 8 22 128
         raw = self.initial(x)
+        x_query = self.forward_feature(raw)
 
         # 与prompt的key计算cos相似
         res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query)
         x = res['prompted_embedding']
-        reduce_sim = res['reduce_sim']
-
-        # print(res['selected_prompts_dict'])
+        reduce_sim = res['reduce_sim'] if cur_task > 0 else None
 
         # 再重新经过backbone
+        # x = self.forward_feature(x)
         x = self.forward_feature(x)
 
         pred = self.cls(x)
@@ -73,7 +109,8 @@ class Model(nn.Module):
         x = self.temporal_att(x)
 
         # mean
-        x = x.sum(1) / x.shape[1]
+        # x = x.sum(1) / x.shape[1]
+        x = torch.mean(x, dim=1)
 
         return x
 

@@ -150,7 +150,7 @@ class UnifiedPromptAdapterTuning(Base):
                                                    log_dir_task, self.args.log_dir)
 
                 # 扩展Prompt Pool
-                if current_t_index > 0:
+                if current_t_index > 0 and hasattr(self.model, 'prompt'):
                     self.model.prompt.update_prompt()
 
                 # 扩展余弦分类器
@@ -335,7 +335,10 @@ class UnifiedPromptAdapterTuning(Base):
 
             loss = self.loss_func(output, target)
 
-            prompt_loss = reduce_sim.sum()
+            prompt_loss = 0.0
+
+            if current_t_index > 0:
+                prompt_loss = reduce_sim.sum()
             # print('prompt loss : {} \t loss: {}'.format(prompt_loss, loss))
             loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
@@ -496,7 +499,8 @@ class UnifiedPromptAdapterTuning(Base):
                 # 更新分类器
                 self.model.update_fc(self.cfg.increm.other_split_size)
                 # 如果prompt是逐增的，增加prompt
-                self.model.prompt.update_prompt()
+                if hasattr(self.model, 'prompt'):
+                    self.model.prompt.update_prompt()
 
             model_defs.print_n_params(self.model)
             for test_mode in ['local', 'global', 'old', 'new']:
@@ -689,18 +693,20 @@ class UnifiedPromptAdapterTuning(Base):
             # Freeze initial layer
             for param in self.model.initial.parameters():
                 param.requires_grad = False
-            for param in self.model.prompt_query.initial.parameters():
-                param.requires_grad = False
             # Freeze spatial_att
             for param in self.model.spatial_att.parameters():
-                param.requires_grad = False
-            for param in self.model.prompt_query.spatial_att.parameters():
                 param.requires_grad = False
             # Freeze temporal_att
             for param in self.model.temporal_att.parameters():
                 param.requires_grad = False
-            for param in self.model.prompt_query.temporal_att.parameters():
-                param.requires_grad = False
+
+            if hasattr(self.model, 'prompt_query'):
+                for param in self.model.prompt_query.initial.parameters():
+                    param.requires_grad = False
+                for param in self.model.prompt_query.spatial_att.parameters():
+                    param.requires_grad = False
+                for param in self.model.prompt_query.temporal_att.parameters():
+                    param.requires_grad = False
             print('freeze feature extractor')
         if classifier:
             # Freeze classifier

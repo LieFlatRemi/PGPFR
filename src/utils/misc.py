@@ -35,7 +35,7 @@ def init_best_measure_info(tag_: str, type_: str) :
     return info
 
 
-def set_seed(seed: int=3407) :
+def set_seed(seed: int=0) :
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)

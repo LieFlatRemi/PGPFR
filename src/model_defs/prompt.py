@@ -2,6 +2,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 '''
 POET algorithm (without expansion) uses a fized sized prompt pool in most NTU RGB+R experiments. 
@@ -149,8 +150,13 @@ class Prompt(nn.Module):
                 # L2P style decoupled prompting
                 _, idx = torch.topk(similarity, k=self.top_k, dim=1)
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
-                batched_prompt_raw = prompt[idx]  # B, top_k, length, C
                 self.pool_dict[prompt_id] += id_counts.to(device)
+                # batched_prompt_raw = prompt[idx]  # B, top_k, length, C
+
+                # 1223 参考coda-prompt，使用enisum计算prompt
+                tau = 5
+                weight = F.softmax(similarity / tau, dim=1)
+                batched_prompt_raw = torch.einsum('bm,mld->bld', weight, prompt)
 
             elif not self.decouple_prompting:
                 Batch_size = similarity.size(0)
@@ -186,9 +192,7 @@ class Prompt(nn.Module):
                 for b in range(Batch_size):
                     batched_prompt_raw[b, :, :, :] = batched_prompt_[b, idx[b], :, :]
 
-            batch_size, top_k, length, c = batched_prompt_raw.shape
-
-            if self.prompt_type in [7, 17, 100, 200, 300, 27, 1206]:
+            if self.prompt_type in [7, 17, 100, 200, 300, 27]:
                 # batched_prompt_raw (N*M, T, V, Base_channels)
                 # L1 output size:(N*M, Base_channels, T, V)
                 # 32 128 8 22
@@ -198,6 +202,9 @@ class Prompt(nn.Module):
                 # mean along top k as length already is req temporal sequence.
                 batched_prompt = torch.mean(batched_prompt_raw, 1)
 
+            elif self.prompt_type == 1206:
+                # 32 prompt_len 128
+                batched_prompt = batched_prompt_raw
             else:
                 batched_prompt = batched_prompt_raw
 
@@ -234,8 +241,10 @@ class Prompt(nn.Module):
 
         if self.prompt_type in [7, 24]:
             # Proposed solution - simply ADD
-            batched_prompt = batched_prompt.permute(0, 2, 3, 1)
+            # 32 8 22 128
+            # batched_prompt = batched_prompt.permute(0, 2, 3, 1)
             # 32 176 128
+            batched_prompt = batched_prompt_raw
             batched_prompt = batched_prompt.view(-1, batched_prompt.shape[1] * batched_prompt.shape[2], self.embed_dim)
             out['prompted_embedding'] = batched_prompt + x_embed
 
@@ -307,13 +316,20 @@ class Prompt(nn.Module):
 
         elif self.prompt_type == 1206:
             # prefix prompt tuning
+
             # batch_size top_k prompt_len prompt_dim
-            batched_prompt = batched_prompt.permute(0, 2, 3, 1)
             p_num = batched_prompt.shape[1]
             p_len = batched_prompt.shape[2]
             T = int(p_len / 2)
             prompt_s = batched_prompt[:, :, :T, :].reshape(-1, p_num * T, self.embed_dim)
             prompt_t = batched_prompt[:, :, T:, :].reshape(-1, p_num * T, self.embed_dim)
+
+            # # coda-prompt
+            # p_len = batched_prompt.shape[1]
+            # T = int(p_len / 2)
+            # prompt_s = batched_prompt[:, :T, :]
+            # prompt_t = batched_prompt[:, T:, :]
+            #
             out['prompted_embedding'] = x_embed
             out['spatial_prompt'] = prompt_s
             out['temporal_prompt'] = prompt_t
