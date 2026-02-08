@@ -7,7 +7,7 @@ seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
 workers: 1
-total_epochs: 150
+total_epochs: 300
 total_epochs_incremental_task: 50
 step_per_epoch: &step_per_epoch On
 step_per_batch: &step_per_batch Off
@@ -32,15 +32,15 @@ model:
     prompt:
         prompt_type: 1206   # 时间空间 prefix
         prompt_pool: True
-        pool_size: 10
-        prompt_length: 40
-        top_k: 10
+        pool_size: 7        # 与下面的任务数相同
+        prompt_length: 40   # 时间空间各20
+        top_k: 1
         decouple: False
-#        random_k: -1
-        random_k: 5
+        random_k: -1
+#        random_k: 5
         stack_random_before: False
-        freeze_prevtask_prompts: True
-        sort: True
+        freeze_prevtask_prompts: False
+        sort: False
         random_expand: False
         force_select_new: True
         temporal_pe: False

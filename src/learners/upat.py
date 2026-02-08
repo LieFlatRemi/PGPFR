@@ -45,17 +45,26 @@ class UnifiedPromptAdapterTuning(Base):
         label_to_name = self.cfg_data.label_to_name[self.args.split_type]
         self.cfg.label_to_name_mapped = {}
         # Run tasks
-        for current_t_index in range(self.cfg.increm.max_task):
+        for current_t_index in range(self.cfg.increm.max_task + 1):
             train_name = str(current_t_index)
             print('======================', train_name, '=======================')
             # Set variables depending on the task
-            if current_t_index > 0:
+            if current_t_index == 1:
+                # Task 1: 使用Task 0的类别，不增加新类
+                total_epochs_task = self.cfg.total_epochs_incremental_task
+                self.cfg.total_epochs = self.cfg.total_epochs_incremental_task
+                self.valid_out_dim = self.cfg.increm.first_split_size  # 保持与Task 0相同
+                self.known_classes = 0  # 从0开始加载，确保加载的是Task 0的类
+                self.add_classes = self.cfg.increm.first_split_size  # 加载Task 0的所有类
+            elif current_t_index > 1:
+                # Task 2+: 正常的持续学习，增加新类
                 total_epochs_task = self.cfg.total_epochs_incremental_task
                 self.cfg.total_epochs = self.cfg.total_epochs_incremental_task
                 self.known_classes = self.valid_out_dim
                 self.add_classes = self.cfg.increm.other_split_size
                 self.valid_out_dim += self.cfg.increm.other_split_size
             else:
+                # Task 0: 训练特征提取器和分类头
                 total_epochs_task = self.cfg.total_epochs
                 self.valid_out_dim = self.cfg.increm.first_split_size
                 self.known_classes = 0
@@ -93,11 +102,13 @@ class UnifiedPromptAdapterTuning(Base):
             print(f"Training classes: {self.train_dataset.keep_class_l}")
 
             # Class and label mapping
-            for k in self.train_dataset.keep_class_l:
-                self.cfg.class_mapping[str(k)] = c
-                c += 1
-            for prev_class, new_class in self.cfg.class_mapping.items():
-                self.cfg.label_to_name_mapped[str(new_class)] = label_to_name[int(prev_class)]
+            # Task 1: 不更新映射，使用Task 0的映射
+            if current_t_index != 1:
+                for k in self.train_dataset.keep_class_l:
+                    self.cfg.class_mapping[str(k)] = c
+                    c += 1
+                for prev_class, new_class in self.cfg.class_mapping.items():
+                    self.cfg.label_to_name_mapped[str(new_class)] = label_to_name[int(prev_class)]
 
             if current_t_index == 0 and self.cfg.increm.load_pretrained_task0:
                 # Load pretrained model for task 0
@@ -149,12 +160,12 @@ class UnifiedPromptAdapterTuning(Base):
                                                    self.cfg.increm.learner.inversion_batch_size, self.cfg.batch_size,
                                                    log_dir_task, self.args.log_dir)
 
-                # 扩展Prompt Pool
-                if current_t_index > 0 and hasattr(self.model, 'prompt'):
+                # 扩展Prompt Pool (Task 2+才扩展，Task 1不扩展)
+                if current_t_index > 1 and hasattr(self.model, 'prompt'):
                     self.model.prompt.update_prompt()
 
-                # 扩展余弦分类器
-                if current_t_index > 0:
+                # 扩展余弦分类器 (Task 2+才扩展，Task 1不扩展)
+                if current_t_index > 1:
                     self.model.update_fc(self.cfg.increm.other_split_size)
 
                 # Modify the base LR if current_task_index > 0
@@ -182,7 +193,12 @@ class UnifiedPromptAdapterTuning(Base):
                     if start_epoch >= total_epochs_task:
                         print(f"Start epoch {start_epoch} is greater than total epochs {total_epochs_task}")
                         # sys.exit()
-                    utils.load_state_dict_single(checkpoint['state_dict'], self.model, self.optimizer, self.scheduler, )
+                    # Safely load state dicts
+                    self.model.load_state_dict(checkpoint['state_dict']['model'])
+                    if self.optimizer is not None and 'optimizer' in checkpoint['state_dict']:
+                        self.optimizer.load_state_dict(checkpoint['state_dict']['optimizer'])
+                    if self.scheduler is not None and 'scheduler' in checkpoint['state_dict']:
+                        self.scheduler.load_state_dict(checkpoint['state_dict']['scheduler'])
                     print(f"=> loaded checkpoint for epoch {checkpoint['epoch']}")
                     del checkpoint
 
@@ -190,7 +206,12 @@ class UnifiedPromptAdapterTuning(Base):
                     start_epoch = 1
                     print("=> no checkpoint found for resuming.")
 
-                # Freeze backbone if desired (from the second task onwards)
+                # Task 0: 冻结prompt (不训练prompt)
+                if current_t_index == 0:
+                    print("Task 0: Freezing prompt...")
+                    self.freeze_model(prompt=True)
+                
+                # Task 1+: 冻结特征提取器
                 if current_t_index > 0 and self.cfg.increm.freeze_feature_extractor:
                     print("Freezing feature extractor...")
                     self.freeze_model(feature_extractor=True)
@@ -233,7 +254,7 @@ class UnifiedPromptAdapterTuning(Base):
                                      train_logger if self.args.gpu == now_gpu else None, current_t_index)
 
                     measures = self.validate_epoch(vbar if self.args.gpu == now_gpu else None, epoch,
-                                                   val_logger if self.args.gpu == now_gpu else None)
+                                                   val_logger if self.args.gpu == now_gpu else None, current_t_index)
 
                     if self.args.gpu == now_gpu:
                         is_best = best_measure_info.func(measures[best_measure_info.tag], best_measure_info.val)
@@ -330,7 +351,7 @@ class UnifiedPromptAdapterTuning(Base):
             output = output[:, :self.valid_out_dim]
 
             # trick：设置前面任务的logit为-inf
-            # if current_t_index > 0:
+            # if current_t_index > 1:
             #     output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
 
             loss = self.loss_func(output, target)
@@ -393,7 +414,7 @@ class UnifiedPromptAdapterTuning(Base):
             train_logger.flush()
 
     @torch.no_grad()
-    def validate_epoch(self, vbar, epoch, val_logger):
+    def validate_epoch(self, vbar, epoch, val_logger, cur_task=0):
 
         losses = edict({
             name: utils.AverageMeter() for name in self.criteria
@@ -424,8 +445,7 @@ class UnifiedPromptAdapterTuning(Base):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
             # output = self.model(pts)[:, :self.valid_out_dim]
-            output, reduce_sim = self.model(pts)
-            output = output[:, :self.valid_out_dim]
+            output, reduce_sim = self.model(pts, cur_task=cur_task, train_mode=-1)
 
             # loss_tensors = []
             # for lname in self.criteria:
@@ -438,7 +458,9 @@ class UnifiedPromptAdapterTuning(Base):
             # loss = sum(loss_tensors)
             loss = self.loss_func(output, target)
 
-            prompt_loss = reduce_sim.sum()
+            prompt_loss = 0.0
+            if reduce_sim is not None:
+                prompt_loss = reduce_sim.sum()
             loss = loss - (self.cfg.model.prompt.loss_coeff * prompt_loss)
 
             val_acc = acc_meter(output, target) * 100
@@ -485,8 +507,11 @@ class UnifiedPromptAdapterTuning(Base):
         self.model = model_defs.get_model(edict({'n_classes': self.cfg.increm.first_split_size, **cfg.model}))
 
         # Test each task
-        for current_t_index in range(cfg.increm.max_task):
-            if current_t_index > 0:
+        # Test each task
+        for current_t_index in range(cfg.increm.max_task + 1):
+            if current_t_index == 1:
+                self.valid_out_dim = self.cfg.increm.first_split_size
+            elif current_t_index > 1:
                 self.valid_out_dim += self.cfg.increm.other_split_size
             else:
                 self.valid_out_dim = self.cfg.increm.first_split_size
@@ -495,7 +520,10 @@ class UnifiedPromptAdapterTuning(Base):
             log_dir_task = osp.join(self.args.log_dir, f"task_{cfg.test_name}")
             print('======================', cfg.test_name, '=======================')
 
-            if current_t_index > 0:
+            if current_t_index == 2:
+                print("debug")
+
+            if current_t_index > 1:
                 # 更新分类器
                 self.model.update_fc(self.cfg.increm.other_split_size)
                 # 如果prompt是逐增的，增加prompt
@@ -504,7 +532,7 @@ class UnifiedPromptAdapterTuning(Base):
 
             model_defs.print_n_params(self.model)
             for test_mode in ['local', 'global', 'old', 'new']:
-                if current_t_index > 0:
+                if current_t_index > 1:
                     if test_mode == 'local':
                         self.known_classes = self.valid_out_dim - self.cfg.increm.other_split_size
                         self.add_classes = self.cfg.increm.other_split_size
@@ -590,7 +618,7 @@ class UnifiedPromptAdapterTuning(Base):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
             # output = self.model(pts)[:, :self.valid_out_dim]
-            output, reduce_sim = self.model(pts)
+            output, reduce_sim = self.model(pts, cur_task=-1, train_mode=-1)
             output = output[:, :self.valid_out_dim]
 
             acc_meter.update(output, target)
@@ -688,7 +716,7 @@ class UnifiedPromptAdapterTuning(Base):
 
         print("\n" + "=" * 80 + "\n")
 
-    def freeze_model(self, feature_extractor=False, classifier=False):
+    def freeze_model(self, feature_extractor=False, classifier=False, prompt=False):
         if feature_extractor:
             # Freeze initial layer
             for param in self.model.initial.parameters():
@@ -700,7 +728,7 @@ class UnifiedPromptAdapterTuning(Base):
             for param in self.model.temporal_att.parameters():
                 param.requires_grad = False
 
-            if hasattr(self.model, 'prompt_query'):
+            if hasattr(self.model, 'prompt_query') and hasattr(self.model.prompt_query, 'query'):
                 for param in self.model.prompt_query.initial.parameters():
                     param.requires_grad = False
                 for param in self.model.prompt_query.spatial_att.parameters():
@@ -712,3 +740,12 @@ class UnifiedPromptAdapterTuning(Base):
             # Freeze classifier
             for param in self.model.final.parameters():
                 param.requires_grad = False
+        if prompt:
+            # Freeze prompt
+            if hasattr(self.model, 'prompt'):
+                for param in self.model.prompt.parameters():
+                    param.requires_grad = False
+            if hasattr(self.model, 'prompt_query'):
+                for param in self.model.prompt_query.parameters():
+                    param.requires_grad = False
+            print('freeze prompt')

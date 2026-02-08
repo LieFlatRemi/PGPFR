@@ -20,15 +20,15 @@ sys.path.append(osp.join(*(['..'] * SUB_DIR_LEVEL)))
 import utils
 
 parser = argparse.ArgumentParser(description='Gesture Recognition.')
-parser.add_argument('--train', type=int, default=1, required=False, help='train (1) or testval (0) or test (-1).')
+parser.add_argument('--train', type=int, default=-1, required=False, help='train (1) or testval (0) or test (-1).')
 parser.add_argument('--dataset', type=str, default='hgr_shrec_2017', required=False, help='name of the dataset.')
 parser.add_argument('--split_type', type=str, default='agnostic', required=False,
                     help='type of data split (if applicable).')
-parser.add_argument('--cfg_file', type=str, default='../configs/params/hgr_shrec_2017/UPAT.yaml',
+parser.add_argument('--cfg_file', type=str, default='../configs/params/hgr_shrec_2017/UPAT_adapter.yaml',
                     required=False, help='config file to load experimental parameters.')
 parser.add_argument('--root_dir', type=str, default='/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/dataset/SHREC17', required=False,
                     help='root directory containing the dataset.')
-parser.add_argument('--log_dir', type=str, default='/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/PGPFR-3/output/hgr_shrec_2017/UPAT', required=False,
+parser.add_argument('--log_dir', type=str, default='/mnt/f/yuecheng/code/PytorchProject/GestureRecognition/PGPFR-3/output/hgr_shrec_2017/UPAT_adapter', required=False,
                     help='directory for logging.')
 parser.add_argument('--save_last_only', action='store_true', help='whether to save the last epoch only.')
 parser.add_argument('--save_epoch_freq', type=int, default=1, help='epoch frequency to save checkpoints.')

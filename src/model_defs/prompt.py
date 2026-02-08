@@ -174,8 +174,13 @@ class Prompt(nn.Module):
                     else:
                         _, idx = torch.topk(use_similarity, k=self.top_k, dim=1, sorted=False)
 
+                # add: 训练时强制选择对应task的prompt
+                if train_mode == 1 and self.prompt_type == 1206 and self.force_select_new:
+                    idx[:] = cur_task - 1
                 # 统计每个prompt被选中的次数
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
+                if train_mode != 1:
+                    print(f'prompt_id: {prompt_id}, id_counts: {id_counts}')
                 self.pool_dict[prompt_id] += id_counts.to(device)
 
                 for b in range(Batch_size):

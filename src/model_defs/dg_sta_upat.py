@@ -36,33 +36,23 @@ class Model(nn.Module):
         self.initial = nn.Sequential(
             nn.Linear(in_channels, d_feat),
             nn.ReLU(),
-            # LayerNorm(d_feat),
-            nn.BatchNorm1d(seq_len * n_joints),
+            LayerNorm(d_feat),
+            # nn.BatchNorm1d(seq_len * n_joints),
             nn.Dropout(dp_rate),
         )
         self.spatial_att = st_layer(dom_type='spatial')
         self.temporal_att = st_layer(dom_type='temporal')
 
-        # self.initial = nn.Sequential(
-        #     nn.Linear(3, 128),
-        #     nn.ReLU(),
-        #     LayerNorm(128),
-        #     nn.Dropout(dp_rate),
-        # )
-        # #input_size, h_num, h_dim, dp_rate, time_len, domain
-        # self.spatial_att = ST_ATT_Layer(input_size=128,output_size= 128, h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="spatial", time_len = 8)
-        #
-        #
-        # self.temporal_att = ST_ATT_Layer(input_size=128, output_size= 128,h_num=h_num, h_dim=h_dim, dp_rate=dp_rate, domain="temporal", time_len = 8)
+        # self.prompt_query = QueryFn(n_classes, config)
 
-        self.prompt_query = QueryFn(n_classes, config)
+        self.prompt_query = nn.Linear(d_feat, d_feat)
 
         self.prompt = Prompt(config)
 
         # self.cls = nn.Linear(128, n_classes)
         self.cls = self.generate_fc(128, config.first_split_size)
 
-    def forward(self, x, cur_task=0, prompt=None):
+    def forward(self, x, cur_task=0, prompt=None, train_mode=1):
         # input shape: [batch_size, time_len, joint_num, 3]
         # 32 8 22 3
 
@@ -84,17 +74,27 @@ class Model(nn.Module):
          先经过init 整合offset prompt 后 再整合为三维  
         """
         x = x.reshape(-1, time_len * joint_num, 3)
-        # 32 8 22 128
+        # 32 176 128
         raw = self.initial(x)
-        x_query = self.forward_feature(raw)
 
-        # 与prompt的key计算cos相似
-        res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query)
-        x = res['prompted_embedding']
-        reduce_sim = res['reduce_sim'] if cur_task > 0 else None
+        # Task 0: 不使用prompt，直接使用raw features
+        # Task 1+: 使用prompt
+        if cur_task == 0:
+            # Task 0: 跳过prompt融合，直接使用raw features
+            x = raw
+            reduce_sim = None
+        else:
+            x_feat = self.forward_feature(raw)
+            x_query = self.prompt_query(x_feat)
+            # Task 1+: 与prompt的key计算cos相似
+            res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query, train_mode=train_mode)
+            x = res['prompted_embedding']
+            reduce_sim = res['reduce_sim']
+            # 跟prompt求和后，感觉是需要归一化一下
+            # temp_norm = nn.LayerNorm(self.feature_dim).to(torch.device("cuda:0"))
+            # x = temp_norm(x)
 
         # 再重新经过backbone
-        # x = self.forward_feature(x)
         x = self.forward_feature(x)
 
         pred = self.cls(x)

@@ -7,7 +7,7 @@ seq_len: &seq_len 8
 rm_global_scale: &rm_global_scale On
 batch_size: 32
 workers: 1
-total_epochs: 100
+total_epochs: 300
 total_epochs_incremental_task: 100
 step_per_epoch: &step_per_epoch On
 step_per_batch: &step_per_batch Off
