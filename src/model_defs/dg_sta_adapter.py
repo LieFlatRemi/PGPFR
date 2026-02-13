@@ -71,7 +71,8 @@ class Model(nn.Module):
             x = self.forward_feature(x, cur_task)
         else:
             x_feat = self.forward_feature(raw)
-            x_query = self.prompt_query(x_feat)
+            # x_query = self.prompt_query(x_feat)
+            x_query = x_feat
             res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query, train_mode=train_mode)
             prompt_s = res['spatial_prompt']
             prompt_t = res['temporal_prompt']

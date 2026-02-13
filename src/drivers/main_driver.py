@@ -67,7 +67,8 @@ def main_worker(gpu, n_gpus, args):
         'abd': 'AlwaysBeDreaming',
         'rdfcil': 'Rdfcil',
         'pgpfr': 'Pgpfr',
-        'upat': 'UnifiedPromptAdapterTuning'
+        'upat': 'UnifiedPromptAdapterTuning',
+        'poet':'POET'
     }
 
     # Execute trial

@@ -1,7 +1,7 @@
 try :
     from . import dg_sta
     from . import dg_sta_BN
-    from . import dg_sta_upat
+    from . import dg_sta_poet
     from . import dg_sta_prefix
     from . import dg_sta_adapter
     from .helpers import print_n_params

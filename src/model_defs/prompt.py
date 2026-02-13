@@ -127,8 +127,8 @@ class Prompt(nn.Module):
 
         if self.prompt_pool:
             # 是否冻结过去task的prompt
-            if self.freeze_previous_task_prompts and cur_task > 0 and self.random_k > 0 and train_mode == 1:
-                previous_prompt_tracker = self.pool_size - self.random_k
+            if self.freeze_previous_task_prompts and cur_task > 0 and train_mode == 1:
+                previous_prompt_tracker = cur_task - 1
                 prompt = torch.cat((self.prompt[:previous_prompt_tracker, :, :].detach(),
                                     self.prompt[previous_prompt_tracker:, :, :]), dim=0)
                 prompt_key = self.prompt_key
@@ -175,6 +175,7 @@ class Prompt(nn.Module):
                         _, idx = torch.topk(use_similarity, k=self.top_k, dim=1, sorted=False)
 
                 # add: 训练时强制选择对应task的prompt
+                # task-specific prompt 限定
                 if train_mode == 1 and self.prompt_type == 1206 and self.force_select_new:
                     idx[:] = cur_task - 1
                 # 统计每个prompt被选中的次数
@@ -329,12 +330,6 @@ class Prompt(nn.Module):
             prompt_s = batched_prompt[:, :, :T, :].reshape(-1, p_num * T, self.embed_dim)
             prompt_t = batched_prompt[:, :, T:, :].reshape(-1, p_num * T, self.embed_dim)
 
-            # # coda-prompt
-            # p_len = batched_prompt.shape[1]
-            # T = int(p_len / 2)
-            # prompt_s = batched_prompt[:, :T, :]
-            # prompt_t = batched_prompt[:, T:, :]
-            #
             out['prompted_embedding'] = x_embed
             out['spatial_prompt'] = prompt_s
             out['temporal_prompt'] = prompt_t

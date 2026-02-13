@@ -16,7 +16,7 @@ log_freq:
     val: null
 
 model:
-    name: 'dg_sta_upat'
+    name: 'dg_sta_poet'
     in_channels: *in_channels
     n_heads: 8 # number of attention heads
     d_head: 32 # dimension of attention heads
@@ -128,7 +128,7 @@ increm:
     freeze_classifier: False
     memory: 0
     learner:
-        type: 'upat'
+        type: 'poet'
         n_samples_per_class: 300
 #        n_samples_per_class: 10
         power_iters: 1000         

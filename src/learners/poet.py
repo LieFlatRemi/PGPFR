@@ -24,9 +24,9 @@ from operator import mul
 
 now_gpu = 0
 
-class UnifiedPromptAdapterTuning(Base):
+class POET(Base):
     def __init__(self, cfg, cfg_data, args, is_train, is_distributed, n_gpus):
-        super(UnifiedPromptAdapterTuning, self).__init__(cfg, cfg_data, args, is_train, is_distributed, n_gpus)
+        super(POET, self).__init__(cfg, cfg_data, args, is_train, is_distributed, n_gpus)
         self.loss_func = nn.CrossEntropyLoss().to(self.args.gpu)
 
     def train(self, n_trial):
@@ -206,6 +206,11 @@ class UnifiedPromptAdapterTuning(Base):
                     start_epoch = 1
                     print("=> no checkpoint found for resuming.")
 
+                # Task 0: 冻结prompt (不训练prompt)
+                if current_t_index == 0:
+                    print("Task 0: Freezing prompt...")
+                    self.freeze_model(prompt=True)
+                
                 # Task 1+: 冻结特征提取器
                 if current_t_index > 0 and self.cfg.increm.freeze_feature_extractor:
                     print("Freezing feature extractor...")
@@ -242,14 +247,6 @@ class UnifiedPromptAdapterTuning(Base):
                         step_per_epoch = self.cfg.optimizer.scheduler.step_per_epoch
 
 
-                # if self.cfg.increm.two_stage:
-                # add: 两阶段训练 先训练 prompt 再训练 adater
-                # task 0 反正也不需要adapter，直接正常走下面这段即可
-                print("first freeze adapter")
-                for param in self.model.spatial_adapter.parameters():
-                    param.requires_grad = False
-                for param in self.model.temporal_adapter.parameters():
-                    param.requires_grad = False
                 for epoch in range(start_epoch, total_epochs_task + 1):
                     torch.cuda.empty_cache()
 
@@ -291,59 +288,6 @@ class UnifiedPromptAdapterTuning(Base):
                         ebar.update()
                         ebar.set_postfix(dict(epoch=epoch))
 
-                if current_t_index > 0:
-                    print("next freeze prompt")
-                    for param in self.model.spatial_adapter.parameters():
-                        param.requires_grad = True
-                    for param in self.model.temporal_adapter.parameters():
-                        param.requires_grad = True
-                    for param in self.model.prompt.parameters():
-                        param.requires_grad = False
-                    for epoch in range(start_epoch, total_epochs_task + 1):
-                        torch.cuda.empty_cache()
-
-                        self.train_epoch(tbar if self.args.gpu == now_gpu else None, epoch,
-                                         train_logger if self.args.gpu == now_gpu else None, current_t_index)
-
-                        measures = self.validate_epoch(vbar if self.args.gpu == now_gpu else None, epoch,
-                                                       val_logger if self.args.gpu == now_gpu else None,
-                                                       current_t_index)
-
-                        if self.args.gpu == now_gpu:
-                            is_best = best_measure_info.func(measures[best_measure_info.tag], best_measure_info.val)
-                            if is_best:
-                                best_measure_info.val = measures[best_measure_info.tag]
-
-                            train_logger.flush()
-                            val_logger.flush()
-
-                            if (epoch % self.args.save_epoch_freq == 0) and (self.args.gpu == now_gpu):
-                                # save model
-                                state_dict = utils.get_state_dict_single(self.model, self.optimizer, self.scheduler,
-                                                                         self.is_distributed)
-
-                                utils.save_checkpoint(log_dir_task,
-                                                      {
-                                                          'epoch': epoch,
-                                                          'state_dict': state_dict,
-                                                          'best_measure_tag': best_measure_info.tag,
-                                                          'best_measure': best_measure_info.val,
-                                                      },
-                                                      epoch,
-                                                      save_last_only=self.args.save_last_only,
-                                                      is_best=is_best,
-                                                      )
-
-                        if step_per_epoch:
-                            optimizer_defs.step_scheduler(self.scheduler)
-
-                        if self.args.gpu == now_gpu:
-                            ebar.update()
-                            ebar.set_postfix(dict(epoch=epoch))
-
-                    for param in self.model.prompt.parameters():
-                        param.requires_grad = True
-
 
             self.last_valid_out_dim = self.valid_out_dim
 
@@ -361,48 +305,6 @@ class UnifiedPromptAdapterTuning(Base):
         if self.args.gpu == now_gpu:
             # Save config edict object
             utils.stdio.save_pickle(osp.join(self.args.log_dir, 'config.pkl'), self.cfg)
-
-    # def train_epoches(self, start_epoch, total_epochs_task, current_t_index):
-    #     for epoch in range(start_epoch, total_epochs_task + 1):
-    #         torch.cuda.empty_cache()
-    #
-    #         self.train_epoch(tbar if self.args.gpu == now_gpu else None, epoch,
-    #                          train_logger if self.args.gpu == now_gpu else None, current_t_index)
-    #
-    #         measures = self.validate_epoch(vbar if self.args.gpu == now_gpu else None, epoch,
-    #                                        val_logger if self.args.gpu == now_gpu else None, current_t_index)
-    #
-    #         if self.args.gpu == now_gpu:
-    #             is_best = best_measure_info.func(measures[best_measure_info.tag], best_measure_info.val)
-    #             if is_best:
-    #                 best_measure_info.val = measures[best_measure_info.tag]
-    #
-    #             train_logger.flush()
-    #             val_logger.flush()
-    #
-    #             if (epoch % self.args.save_epoch_freq == 0) and (self.args.gpu == now_gpu):
-    #                 # save model
-    #                 state_dict = utils.get_state_dict_single(self.model, self.optimizer, self.scheduler,
-    #                                                          self.is_distributed)
-    #
-    #                 utils.save_checkpoint(log_dir_task,
-    #                                       {
-    #                                           'epoch': epoch,
-    #                                           'state_dict': state_dict,
-    #                                           'best_measure_tag': best_measure_info.tag,
-    #                                           'best_measure': best_measure_info.val,
-    #                                       },
-    #                                       epoch,
-    #                                       save_last_only=self.args.save_last_only,
-    #                                       is_best=is_best,
-    #                                       )
-    #
-    #         if step_per_epoch:
-    #             optimizer_defs.step_scheduler(self.scheduler)
-    #
-    #         if self.args.gpu == now_gpu:
-    #             ebar.update()
-    #             ebar.set_postfix(dict(epoch=epoch))
 
     def train_epoch(self, tbar, epoch, train_logger, current_t_index):
 
@@ -449,8 +351,8 @@ class UnifiedPromptAdapterTuning(Base):
             output = output[:, :self.valid_out_dim]
 
             # trick：设置前面任务的logit为-inf
-            if current_t_index > 1:
-                output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
+            # if current_t_index > 1:
+            #     output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
 
             loss = self.loss_func(output, target)
 
@@ -605,6 +507,7 @@ class UnifiedPromptAdapterTuning(Base):
         self.model = model_defs.get_model(edict({'n_classes': self.cfg.increm.first_split_size, **cfg.model}))
 
         # Test each task
+        # Test each task
         for current_t_index in range(cfg.increm.max_task + 1):
             if current_t_index == 1:
                 self.valid_out_dim = self.cfg.increm.first_split_size
@@ -616,6 +519,9 @@ class UnifiedPromptAdapterTuning(Base):
             cfg.test_name = str(current_t_index)
             log_dir_task = osp.join(self.args.log_dir, f"task_{cfg.test_name}")
             print('======================', cfg.test_name, '=======================')
+
+            if current_t_index == 2:
+                print("debug")
 
             if current_t_index > 1:
                 # 更新分类器
@@ -810,7 +716,7 @@ class UnifiedPromptAdapterTuning(Base):
 
         print("\n" + "=" * 80 + "\n")
 
-    def freeze_model(self, feature_extractor=False, classifier=False):
+    def freeze_model(self, feature_extractor=False, classifier=False, prompt=False):
         if feature_extractor:
             # Freeze initial layer
             for param in self.model.initial.parameters():
@@ -834,3 +740,12 @@ class UnifiedPromptAdapterTuning(Base):
             # Freeze classifier
             for param in self.model.final.parameters():
                 param.requires_grad = False
+        if prompt:
+            # Freeze prompt
+            if hasattr(self.model, 'prompt'):
+                for param in self.model.prompt.parameters():
+                    param.requires_grad = False
+            if hasattr(self.model, 'prompt_query'):
+                for param in self.model.prompt_query.parameters():
+                    param.requires_grad = False
+            print('freeze prompt')
