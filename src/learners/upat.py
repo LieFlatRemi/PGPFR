@@ -31,6 +31,52 @@ class UnifiedPromptAdapterTuning(Base):
         
         # 初始化类索引到任务索引的映射
         self.class_index_to_task_map = {}
+        self.build_class_index_to_task_map()
+
+    def build_class_index_to_task_map(self):
+        for current_t_index in range(self.cfg.increm.max_task + 1):
+            train_name = str(current_t_index)
+            print('======================', train_name, '=======================')
+            # Set variables depending on the task
+            if current_t_index == 1:
+                # Task 1: 使用Task 0的类别，不增加新类
+                total_epochs_task = self.cfg.total_epochs_incremental_task
+                self.cfg.total_epochs = self.cfg.total_epochs_incremental_task
+                self.valid_out_dim = self.cfg.increm.first_split_size  # 保持与Task 0相同
+                self.known_classes = 0  # 从0开始加载，确保加载的是Task 0的类
+                self.add_classes = self.cfg.increm.first_split_size  # 加载Task 0的所有类
+            elif current_t_index > 1:
+                # Task 2+: 正常的持续学习，增加新类
+                total_epochs_task = self.cfg.total_epochs_incremental_task
+                self.cfg.total_epochs = self.cfg.total_epochs_incremental_task
+                self.known_classes = self.valid_out_dim
+                self.add_classes = self.cfg.increm.other_split_size
+                self.valid_out_dim += self.cfg.increm.other_split_size
+            else:
+                # task=0 跳过
+                continue
+
+            # load dataset for task
+            self.train_dataset = getattr(importlib.import_module('.' + self.args.dataset, package='datasets'),
+                                         'Dataset')('train', self.args.split_type, self.cfg_data,
+                                                    self.cfg.transforms['train'],
+                                                    self.add_classes, self.known_classes,
+                                                    rm_global_scale=self.cfg.rm_global_scale, drop_seed=n_trial)
+
+            # Class and label mapping
+            # Task 1: 不更新映射，使用Task 0的映射
+            if current_t_index != 1:
+                for k in self.train_dataset.keep_class_l:
+                    self.cfg.class_mapping[str(k)] = c
+                    c += 1
+                for prev_class, new_class in self.cfg.class_mapping.items():
+                    self.cfg.label_to_name_mapped[str(new_class)] = label_to_name[int(prev_class)]
+
+            # 更新类索引到任务索引的映射map
+            if current_t_index > 0:
+                for k in self.train_dataset.keep_class_l:
+                    cil_index = self.cfg.class_mapping[str(k)]
+                    self.class_index_to_task_map[cil_index] = current_t_index
 
     def train(self, n_trial):
         print(f"Using GPU = {self.args.gpu} with (batch_size, workers) = ({self.cfg.batch_size}, {self.cfg.workers})")
