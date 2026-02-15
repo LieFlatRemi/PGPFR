@@ -180,7 +180,7 @@ class Prompt(nn.Module):
                     idx[:] = cur_task - 1
                 if x_task is not None:
                     for i in range(x_task):
-                        idx[i] = x_task[i]
+                        idx[i] = x_task[i].to(self.prompt.device)
                 # 统计每个prompt被选中的次数
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
                 if train_mode != 1:

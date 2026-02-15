@@ -681,7 +681,7 @@ class UnifiedPromptAdapterTuning(Base):
             x_task = [None] * len(target)
             # 获取每个样本对应的task id
             for i, target_class in enumerate(target):
-                x_task[i] = self.class_index_to_task_map[target[i]]
+                x_task[i] = self.class_index_to_task_map[target[i].cpu().item()]
 
             # output = self.model(pts)[:, :self.valid_out_dim]
             output, reduce_sim = self.model(pts, cur_task=-1, train_mode=-1, x_task=x_task)
