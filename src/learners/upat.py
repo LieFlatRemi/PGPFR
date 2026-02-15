@@ -64,19 +64,20 @@ class UnifiedPromptAdapterTuning(Base):
                                                     self.add_classes, self.known_classes,
                                                     rm_global_scale=self.cfg.rm_global_scale, drop_seed=n_trial)
 
+            class_mapping = {}
             # Class and label mapping
             # Task 1: 不更新映射，使用Task 0的映射
             if current_t_index != 1:
                 for k in self.train_dataset.keep_class_l:
-                    self.cfg.class_mapping[str(k)] = c
+                    class_mapping[str(k)] = c
                     c += 1
-                for prev_class, new_class in self.cfg.class_mapping.items():
+                for prev_class, new_class in class_mapping.items():
                     self.cfg.label_to_name_mapped[str(new_class)] = label_to_name[int(prev_class)]
 
             # 更新类索引到任务索引的映射map
             if current_t_index > 0:
                 for k in self.train_dataset.keep_class_l:
-                    cil_index = self.cfg.class_mapping[str(k)]
+                    cil_index = class_mapping[str(k)]
                     self.class_index_to_task_map[cil_index] = current_t_index
 
     def train(self, n_trial):
