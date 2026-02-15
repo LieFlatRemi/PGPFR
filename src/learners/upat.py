@@ -34,7 +34,7 @@ class UnifiedPromptAdapterTuning(Base):
         self.build_class_index_to_task_map()
 
     def build_class_index_to_task_map(self):
-        n_trial = self.args.n_trial
+        n_trial = self.args.trial_id
         for current_t_index in range(self.cfg.increm.max_task + 1):
             train_name = str(current_t_index)
             print('======================', train_name, '=======================')
