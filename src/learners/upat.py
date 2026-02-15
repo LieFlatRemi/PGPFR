@@ -28,6 +28,9 @@ class UnifiedPromptAdapterTuning(Base):
     def __init__(self, cfg, cfg_data, args, is_train, is_distributed, n_gpus):
         super(UnifiedPromptAdapterTuning, self).__init__(cfg, cfg_data, args, is_train, is_distributed, n_gpus)
         self.loss_func = nn.CrossEntropyLoss().to(self.args.gpu)
+        
+        # 初始化类索引到任务索引的映射
+        self.class_index_to_task_map = {}
 
     def train(self, n_trial):
         print(f"Using GPU = {self.args.gpu} with (batch_size, workers) = ({self.cfg.batch_size}, {self.cfg.workers})")
@@ -109,6 +112,12 @@ class UnifiedPromptAdapterTuning(Base):
                     c += 1
                 for prev_class, new_class in self.cfg.class_mapping.items():
                     self.cfg.label_to_name_mapped[str(new_class)] = label_to_name[int(prev_class)]
+
+            # 更新类索引到任务索引的映射map
+            if current_t_index > 0:
+                for k in self.train_dataset.keep_class_l:
+                    cil_index = self.cfg.class_mapping[str(k)]
+                    self.class_index_to_task_map[cil_index] = current_t_index
 
             if current_t_index == 0 and self.cfg.increm.load_pretrained_task0:
                 # Load pretrained model for task 0
@@ -362,48 +371,6 @@ class UnifiedPromptAdapterTuning(Base):
             # Save config edict object
             utils.stdio.save_pickle(osp.join(self.args.log_dir, 'config.pkl'), self.cfg)
 
-    # def train_epoches(self, start_epoch, total_epochs_task, current_t_index):
-    #     for epoch in range(start_epoch, total_epochs_task + 1):
-    #         torch.cuda.empty_cache()
-    #
-    #         self.train_epoch(tbar if self.args.gpu == now_gpu else None, epoch,
-    #                          train_logger if self.args.gpu == now_gpu else None, current_t_index)
-    #
-    #         measures = self.validate_epoch(vbar if self.args.gpu == now_gpu else None, epoch,
-    #                                        val_logger if self.args.gpu == now_gpu else None, current_t_index)
-    #
-    #         if self.args.gpu == now_gpu:
-    #             is_best = best_measure_info.func(measures[best_measure_info.tag], best_measure_info.val)
-    #             if is_best:
-    #                 best_measure_info.val = measures[best_measure_info.tag]
-    #
-    #             train_logger.flush()
-    #             val_logger.flush()
-    #
-    #             if (epoch % self.args.save_epoch_freq == 0) and (self.args.gpu == now_gpu):
-    #                 # save model
-    #                 state_dict = utils.get_state_dict_single(self.model, self.optimizer, self.scheduler,
-    #                                                          self.is_distributed)
-    #
-    #                 utils.save_checkpoint(log_dir_task,
-    #                                       {
-    #                                           'epoch': epoch,
-    #                                           'state_dict': state_dict,
-    #                                           'best_measure_tag': best_measure_info.tag,
-    #                                           'best_measure': best_measure_info.val,
-    #                                       },
-    #                                       epoch,
-    #                                       save_last_only=self.args.save_last_only,
-    #                                       is_best=is_best,
-    #                                       )
-    #
-    #         if step_per_epoch:
-    #             optimizer_defs.step_scheduler(self.scheduler)
-    #
-    #         if self.args.gpu == now_gpu:
-    #             ebar.update()
-    #             ebar.set_postfix(dict(epoch=epoch))
-
     def train_epoch(self, tbar, epoch, train_logger, current_t_index):
 
         losses = edict({
@@ -449,8 +416,8 @@ class UnifiedPromptAdapterTuning(Base):
             output = output[:, :self.valid_out_dim]
 
             # trick：设置前面任务的logit为-inf
-            if current_t_index > 1:
-                output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
+            # if current_t_index > 1:
+            #     output[:, :self.valid_out_dim - self.add_classes] = -float('inf')
 
             loss = self.loss_func(output, target)
 
@@ -711,8 +678,13 @@ class UnifiedPromptAdapterTuning(Base):
             for i, target_class in enumerate(target):
                 target[i] = self.cfg.class_mapping[str(target_class.item())]
 
+            x_task = [None] * len(target)
+            # 获取每个样本对应的task id
+            for i, target_class in enumerate(target):
+                x_task[i] = self.class_index_to_task_map[target[i]]
+
             # output = self.model(pts)[:, :self.valid_out_dim]
-            output, reduce_sim = self.model(pts, cur_task=-1, train_mode=-1)
+            output, reduce_sim = self.model(pts, cur_task=-1, train_mode=-1, x_task=x_task)
             output = output[:, :self.valid_out_dim]
 
             acc_meter.update(output, target)

@@ -117,7 +117,7 @@ class Prompt(nn.Module):
         x_inv_norm = torch.rsqrt(torch.maximum(square_sum, torch.tensor(epsilon, device=x.device)))
         return x * x_inv_norm
 
-    def forward(self, x_embed, prompt_mask=None, cur_task=0, cls_features=None, train_mode=1):
+    def forward(self, x_embed, prompt_mask=None, cur_task=0, cls_features=None, train_mode=1, x_task=None):
         '''
         cls_feat is the query function output, it will be used to curate promnpt.
         '''
@@ -178,6 +178,9 @@ class Prompt(nn.Module):
                 # task-specific prompt 限定
                 if train_mode == 1 and self.prompt_type == 1206 and self.force_select_new:
                     idx[:] = cur_task - 1
+                if x_task is not None:
+                    for i in range(x_task):
+                        idx[i] = x_task[i]
                 # 统计每个prompt被选中的次数
                 prompt_id, id_counts = torch.unique(idx, return_counts=True)
                 if train_mode != 1:

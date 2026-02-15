@@ -49,7 +49,7 @@ class Model(nn.Module):
         # self.cls = nn.Linear(128, n_classes)
         self.cls = self.generate_fc(128, config.first_split_size)
 
-    def forward(self, x, cur_task=0, train_mode=1):
+    def forward(self, x, cur_task=0, train_mode=1, x_task=None):
         # input shape: [batch_size, time_len, joint_num, 3]
         # 32 8 22 3
 
@@ -71,9 +71,9 @@ class Model(nn.Module):
             x = self.forward_feature(x, cur_task)
         else:
             x_feat = self.forward_feature(raw)
-            # x_query = self.prompt_query(x_feat)
-            x_query = x_feat
-            res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query, train_mode=train_mode)
+            x_query = self.prompt_query(x_feat)
+            # x_query = x_feat
+            res = self.prompt(x_embed=raw, cur_task=cur_task, cls_features=x_query, train_mode=train_mode, x_task=x_task)
             prompt_s = res['spatial_prompt']
             prompt_t = res['temporal_prompt']
             reduce_sim = res['reduce_sim']
